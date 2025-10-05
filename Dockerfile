@@ -3,12 +3,15 @@ FROM node:18-alpine AS builder
 
 WORKDIR /app
 
-# Copy package files
+# Copy package files and install dependencies
 COPY package*.json ./
+COPY tsconfig.json ./
 RUN npm install
 
-# Copy source and build
-COPY . .
+# Copy source code
+COPY src ./src
+
+# Build the application
 RUN npm run build
 
 # Production image
