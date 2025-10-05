@@ -68,16 +68,15 @@ class GameServer {
       });
     });
 
-    // Start game endpoint
+    // Start game endpoint - deals cards without selecting starting player
     this.app.post('/api/room/:roomId/start', (req, res) => {
       const roomId = req.params.roomId;
-      const { startingPlayerId } = req.body;
-      const success = this.startGame(roomId, startingPlayerId);
+      const success = this.dealCards(roomId);
 
       if (success) {
-        res.json({ success: true, message: 'Game started' });
+        res.json({ success: true, message: 'Cards dealt' });
       } else {
-        res.status(400).json({ success: false, error: 'Could not start game' });
+        res.status(400).json({ success: false, error: 'Could not deal cards' });
       }
     });
 
@@ -143,6 +142,9 @@ class GameServer {
           break;
         case 'leave_room':
           this.handleLeaveRoom(ws, message);
+          break;
+        case 'select_starting_player':
+          this.handleSelectStartingPlayer(ws, message);
           break;
         case 'ping':
           // Keep-alive ping - just respond with pong
@@ -294,6 +296,19 @@ class GameServer {
     this.handlePlayerDisconnection(ws);
   }
 
+  private handleSelectStartingPlayer(ws: WebSocket, message: WebSocketMessage) {
+    const connection = this.playerConnections.get(ws);
+    if (!connection || !message.startingPlayerId) return;
+
+    const success = this.startGame(connection.roomId, message.startingPlayerId);
+    if (!success) {
+      ws.send(JSON.stringify({
+        type: 'error',
+        error: 'Failed to select starting player'
+      }));
+    }
+  }
+
   private handlePlayerDisconnection(ws: WebSocket) {
     const connection = this.playerConnections.get(ws);
     if (!connection) return;
@@ -374,7 +389,7 @@ class GameServer {
     }, 10 * 60 * 1000); // Check every 10 minutes
   }
 
-  public startGame(roomId: string, startingPlayerId?: string): boolean {
+  public dealCards(roomId: string): boolean {
     const room = this.rooms.get(roomId);
     if (!room || room.isStarted || room.players.size < 1) {
       return false;
@@ -387,8 +402,26 @@ class GameServer {
         connectionId: p.id
       }));
 
-      room.gameState = GameEngine.initializeGame(roomId, playerData, startingPlayerId);
+      room.gameState = GameEngine.initializeGame(roomId, playerData);
       room.isStarted = true;
+      room.lastActivity = Date.now();
+
+      this.broadcastGameState(roomId);
+      return true;
+    } catch (error) {
+      console.error('Failed to deal cards:', error);
+      return false;
+    }
+  }
+
+  public startGame(roomId: string, startingPlayerId?: string): boolean {
+    const room = this.rooms.get(roomId);
+    if (!room || !room.gameState || room.gameState.status !== 'cards_dealt') {
+      return false;
+    }
+
+    try {
+      room.gameState = GameEngine.selectStartingPlayer(room.gameState, startingPlayerId);
       room.lastActivity = Date.now();
 
       this.broadcastGameState(roomId);

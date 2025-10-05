@@ -37,6 +37,68 @@ body {
   padding: 20px;
 }
 
+/* Cards Dealt Screen */
+.cards-dealt-screen {
+  max-width: 1000px;
+  margin: 0 auto;
+  padding: 20px;
+}
+
+.cards-dealt-content {
+  display: flex;
+  flex-direction: column;
+  gap: 30px;
+  align-items: center;
+}
+
+.your-cards {
+  background: white;
+  padding: 20px;
+  border-radius: 12px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+  text-align: center;
+}
+
+.your-cards .hand {
+  display: flex;
+  justify-content: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-top: 15px;
+}
+
+.card.preview {
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  color: white;
+  box-shadow: 0 4px 8px rgba(0, 0, 0, 0.2);
+}
+
+.starting-player-selection {
+  background: white;
+  padding: 30px;
+  border-radius: 12px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+  text-align: center;
+  max-width: 600px;
+}
+
+.starting-player-selection h3 {
+  margin-bottom: 10px;
+  color: #333;
+}
+
+.starting-player-selection p {
+  color: #666;
+  margin-bottom: 20px;
+}
+
+.player-selection {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  align-items: center;
+}
+
 .room-header {
   display: flex;
   justify-content: space-between;

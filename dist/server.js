@@ -22,7 +22,7 @@ class GameServer {
     }
     setupExpress() {
         const allowedOrigins = process.env.NODE_ENV === 'production'
-            ? [process.env.FRONTEND_URL, process.env.RENDER_EXTERNAL_URL].filter((url) => Boolean(url))
+            ? [process.env.FRONTEND_URL, process.env.RENDER_EXTERNAL_URL, 'https://the-game-1-quxo.onrender.com'].filter((url) => Boolean(url))
             : ['http://localhost:3000', 'http://localhost:3001'];
         this.app.use((0, cors_1.default)({
             origin: allowedOrigins,
@@ -50,6 +50,17 @@ class GameServer {
                 isStarted: room.isStarted,
                 status: room.gameState?.status || 'waiting'
             });
+        });
+        // Start game endpoint - deals cards without selecting starting player
+        this.app.post('/api/room/:roomId/start', (req, res) => {
+            const roomId = req.params.roomId;
+            const success = this.dealCards(roomId);
+            if (success) {
+                res.json({ success: true, message: 'Cards dealt' });
+            }
+            else {
+                res.status(400).json({ success: false, error: 'Could not deal cards' });
+            }
         });
         // Create room
         this.app.post('/api/room', (req, res) => {
@@ -108,6 +119,13 @@ class GameServer {
                     break;
                 case 'leave_room':
                     this.handleLeaveRoom(ws, message);
+                    break;
+                case 'select_starting_player':
+                    this.handleSelectStartingPlayer(ws, message);
+                    break;
+                case 'ping':
+                    // Keep-alive ping - just respond with pong
+                    ws.send(JSON.stringify({ type: 'pong' }));
                     break;
                 default:
                     ws.send(JSON.stringify({ type: 'error', error: 'Unknown message type' }));
@@ -237,6 +255,18 @@ class GameServer {
     handleLeaveRoom(ws, message) {
         this.handlePlayerDisconnection(ws);
     }
+    handleSelectStartingPlayer(ws, message) {
+        const connection = this.playerConnections.get(ws);
+        if (!connection || !message.startingPlayerId)
+            return;
+        const success = this.startGame(connection.roomId, message.startingPlayerId);
+        if (!success) {
+            ws.send(JSON.stringify({
+                type: 'error',
+                error: 'Failed to select starting player'
+            }));
+        }
+    }
     handlePlayerDisconnection(ws) {
         const connection = this.playerConnections.get(ws);
         if (!connection)
@@ -307,7 +337,7 @@ class GameServer {
             });
         }, 10 * 60 * 1000); // Check every 10 minutes
     }
-    startGame(roomId) {
+    dealCards(roomId) {
         const room = this.rooms.get(roomId);
         if (!room || room.isStarted || room.players.size < 1) {
             return false;
@@ -320,6 +350,22 @@ class GameServer {
             }));
             room.gameState = GameEngine_1.GameEngine.initializeGame(roomId, playerData);
             room.isStarted = true;
+            room.lastActivity = Date.now();
+            this.broadcastGameState(roomId);
+            return true;
+        }
+        catch (error) {
+            console.error('Failed to deal cards:', error);
+            return false;
+        }
+    }
+    startGame(roomId, startingPlayerId) {
+        const room = this.rooms.get(roomId);
+        if (!room || !room.gameState || room.gameState.status !== 'cards_dealt') {
+            return false;
+        }
+        try {
+            room.gameState = GameEngine_1.GameEngine.selectStartingPlayer(room.gameState, startingPlayerId);
             room.lastActivity = Date.now();
             this.broadcastGameState(roomId);
             return true;

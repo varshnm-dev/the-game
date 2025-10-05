@@ -37,7 +37,7 @@ export class GameEngine {
     return 6;
   }
 
-  static initializeGame(roomId: string, playerData: {id: string, name: string, connectionId: string}[], startingPlayerId?: string): ServerGameState {
+  static initializeGame(roomId: string, playerData: {id: string, name: string, connectionId: string}[]): ServerGameState {
     if (playerData.length < 1 || playerData.length > 5) {
       throw new Error('Invalid number of players');
     }
@@ -45,7 +45,7 @@ export class GameEngine {
     const deck = this.createDeck();
     const piles = this.createInitialPiles();
     const handSize = this.getStartingHandSize(playerData.length);
-    
+
     const players: ServerPlayer[] = playerData.map((data, index) => {
       const hand: Card[] = [];
       for (let i = 0; i < handSize; i++) {
@@ -58,28 +58,16 @@ export class GameEngine {
         name: data.name,
         connectionId: data.connectionId,
         hand: hand.sort((a, b) => a.value - b.value),
-        isCurrentPlayer: false, // Will be set below
+        isCurrentPlayer: false,
         isConnected: true
       };
     });
 
-    // Determine starting player - use manual selection or auto-select
-    let startingPlayerIndex = 0;
-    if (startingPlayerId) {
-      const manualIndex = players.findIndex(p => p.id === startingPlayerId);
-      if (manualIndex !== -1) {
-        startingPlayerIndex = manualIndex;
-      }
-    } else {
-      startingPlayerIndex = this.determineStartingPlayer(players, piles);
-    }
-    players[startingPlayerIndex].isCurrentPlayer = true;
-
     return {
       id: roomId,
-      status: 'playing',
+      status: 'cards_dealt',
       players,
-      currentPlayerId: players[startingPlayerIndex].id,
+      currentPlayerId: '', // Will be set when starting player is selected
       piles,
       deck,
       cardsPlayed: 0,
@@ -91,6 +79,32 @@ export class GameEngine {
       createdAt: Date.now(),
       lastActivity: Date.now()
     };
+  }
+
+  static selectStartingPlayer(gameState: ServerGameState, startingPlayerId?: string): ServerGameState {
+    if (gameState.status !== 'cards_dealt') {
+      throw new Error('Can only select starting player after cards are dealt');
+    }
+
+    const newState = JSON.parse(JSON.stringify(gameState)) as ServerGameState;
+
+    // Determine starting player - use manual selection or auto-select
+    let startingPlayerIndex = 0;
+    if (startingPlayerId) {
+      const manualIndex = newState.players.findIndex(p => p.id === startingPlayerId);
+      if (manualIndex !== -1) {
+        startingPlayerIndex = manualIndex;
+      }
+    } else {
+      startingPlayerIndex = this.determineStartingPlayer(newState.players, newState.piles);
+    }
+
+    newState.players[startingPlayerIndex].isCurrentPlayer = true;
+    newState.currentPlayerId = newState.players[startingPlayerIndex].id;
+    newState.status = 'playing';
+    newState.lastActivity = Date.now();
+
+    return newState;
   }
 
   static canPlayCard(card: Card, pile: Pile): boolean {

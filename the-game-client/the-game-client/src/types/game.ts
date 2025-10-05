@@ -30,7 +30,7 @@ export interface PublicPlayer {
 
 export interface ServerGameState {
   id: string;
-  status: 'waiting' | 'playing' | 'won' | 'lost';
+  status: 'waiting' | 'cards_dealt' | 'playing' | 'won' | 'lost';
   players: ServerPlayer[];
   currentPlayerId: string;
   piles: Pile[];
@@ -47,7 +47,7 @@ export interface ServerGameState {
 
 export interface ClientGameState {
   id: string;
-  status: 'waiting' | 'playing' | 'won' | 'lost';
+  status: 'waiting' | 'cards_dealt' | 'playing' | 'won' | 'lost';
   players: PublicPlayer[];
   currentPlayerId: string;
   piles: Pile[];
@@ -80,11 +80,12 @@ export interface ChatMessage {
 }
 
 export interface WebSocketMessage {
-  type: 'join_room' | 'create_room' | 'game_action' | 'chat_message' | 'leave_room';
+  type: 'join_room' | 'create_room' | 'game_action' | 'chat_message' | 'leave_room' | 'select_starting_player';
   roomId?: string;
   playerId?: string;
   playerName?: string;
   action?: GameAction;
   message?: ChatMessage;
+  startingPlayerId?: string;
   data?: any;
 }

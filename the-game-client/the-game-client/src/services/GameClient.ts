@@ -328,6 +328,13 @@ export class GameClient {
     }
   }
 
+  selectStartingPlayer(startingPlayerId: string): void {
+    this.send({
+      type: 'select_starting_player',
+      startingPlayerId
+    });
+  }
+
   private generatePlayerId(): string {
     return Math.random().toString(36).substring(2) + Date.now().toString(36);
   }

@@ -55,15 +55,15 @@ class GameEngine {
                 name: data.name,
                 connectionId: data.connectionId,
                 hand: hand.sort((a, b) => a.value - b.value),
-                isCurrentPlayer: index === 0,
+                isCurrentPlayer: false,
                 isConnected: true
             };
         });
         return {
             id: roomId,
-            status: 'playing',
+            status: 'cards_dealt',
             players,
-            currentPlayerId: players[0].id,
+            currentPlayerId: '', // Will be set when starting player is selected
             piles,
             deck,
             cardsPlayed: 0,
@@ -76,7 +76,34 @@ class GameEngine {
             lastActivity: Date.now()
         };
     }
+    static selectStartingPlayer(gameState, startingPlayerId) {
+        if (gameState.status !== 'cards_dealt') {
+            throw new Error('Can only select starting player after cards are dealt');
+        }
+        const newState = JSON.parse(JSON.stringify(gameState));
+        // Determine starting player - use manual selection or auto-select
+        let startingPlayerIndex = 0;
+        if (startingPlayerId) {
+            const manualIndex = newState.players.findIndex(p => p.id === startingPlayerId);
+            if (manualIndex !== -1) {
+                startingPlayerIndex = manualIndex;
+            }
+        }
+        else {
+            startingPlayerIndex = this.determineStartingPlayer(newState.players, newState.piles);
+        }
+        newState.players[startingPlayerIndex].isCurrentPlayer = true;
+        newState.currentPlayerId = newState.players[startingPlayerIndex].id;
+        newState.status = 'playing';
+        newState.lastActivity = Date.now();
+        return newState;
+    }
     static canPlayCard(card, pile) {
+        // Special case: Any card can be played on piles at their starting values
+        if ((pile.type === 'ascending' && pile.currentValue === pile.startValue) ||
+            (pile.type === 'descending' && pile.currentValue === pile.startValue)) {
+            return true;
+        }
         if (pile.type === 'ascending') {
             return card.value > pile.currentValue || card.value === pile.currentValue - 10;
         }
@@ -174,6 +201,33 @@ class GameEngine {
     }
     static hasValidMoves(player, piles) {
         return player.hand.some(card => piles.some(pile => this.canPlayCard(card, pile)));
+    }
+    static determineStartingPlayer(players, piles) {
+        let bestPlayerIndex = 0;
+        let bestScore = -1;
+        for (let i = 0; i < players.length; i++) {
+            const player = players[i];
+            let score = 0;
+            // Since any card can be played initially, focus on strategic starting cards
+            // Bonus points for having extreme values (2, 3, 98, 99) which are excellent openers
+            const extremeCards = player.hand.filter(card => card.value <= 3 || card.value >= 98).length;
+            score += extremeCards * 3;
+            // Bonus for having cards near the middle (around 50) for flexibility
+            const middleCards = player.hand.filter(card => card.value >= 45 && card.value <= 55).length;
+            score += middleCards;
+            // Bonus for having good chain-starting cards
+            const lowChainStarters = player.hand.filter(card => card.value <= 15).length;
+            const highChainStarters = player.hand.filter(card => card.value >= 85).length;
+            score += (lowChainStarters + highChainStarters) * 2;
+            // Small bonus for having a diverse spread of cards
+            const cardSpread = Math.max(...player.hand.map(c => c.value)) - Math.min(...player.hand.map(c => c.value));
+            score += Math.floor(cardSpread / 20);
+            if (score > bestScore) {
+                bestScore = score;
+                bestPlayerIndex = i;
+            }
+        }
+        return bestPlayerIndex;
     }
     static createClientGameState(serverState, playerId) {
         const player = serverState.players.find(p => p.id === playerId);

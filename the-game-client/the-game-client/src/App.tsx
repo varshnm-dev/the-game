@@ -8,7 +8,7 @@ import PlayerList from './components/PlayerList';
 import './App.css';
 
 interface AppState {
-  screen: 'setup' | 'waiting' | 'playing';
+  screen: 'setup' | 'waiting' | 'cards_dealt' | 'playing';
   gameClient: GameClient;
   connectionStatus: 'disconnected' | 'connecting' | 'connected';
   roomId: string | null;
@@ -86,12 +86,18 @@ function App() {
       },
 
       game_state_update: (event: GameClientEvent) => {
-        setState(prev => ({
-          ...prev,
-          screen: 'playing',
-          gameState: event.gameState || null,
-          chatMessages: event.chatMessages || prev.chatMessages
-        }));
+        if (event.gameState) {
+          setState(prev => {
+            const newScreen = event.gameState!.status === 'cards_dealt' ? 'cards_dealt' :
+                             event.gameState!.status === 'playing' ? 'playing' : prev.screen;
+            return {
+              ...prev,
+              screen: newScreen,
+              gameState: event.gameState || null,
+              chatMessages: event.chatMessages || prev.chatMessages
+            };
+          });
+        }
       },
 
       chat_message: (event: GameClientEvent) => {
@@ -184,6 +190,10 @@ function App() {
     }
   };
 
+  const handleSelectStartingPlayer = (startingPlayerId: string) => {
+    state.gameClient.selectStartingPlayer(startingPlayerId);
+  };
+
   const renderConnectionStatus = () => {
     const statusColors = {
       disconnected: '#ff4444',
@@ -267,40 +277,20 @@ function App() {
 
             {state.players.length >= 1 && (
               <div style={{ marginTop: '20px' }}>
-                <p><strong>Who should start first?</strong></p>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', margin: '10px 0' }}>
-                  {state.players.map(player => (
-                    <button
-                      key={player.id}
-                      onClick={() => handleStartGameWithPlayer(player.id)}
-                      style={{
-                        padding: '10px 20px',
-                        background: player.id === state.playerId ? '#2196f3' : '#f0f0f0',
-                        color: player.id === state.playerId ? 'white' : '#333',
-                        border: '2px solid #ddd',
-                        borderRadius: '8px',
-                        fontSize: '14px',
-                        fontWeight: '600',
-                        cursor: 'pointer'
-                      }}
-                    >
-                      {player.name} {player.id === state.playerId ? '(You)' : ''} starts
-                    </button>
-                  ))}
-                </div>
                 <button
                   onClick={handleStartGame}
                   style={{
-                    padding: '8px 16px',
-                    background: '#666',
+                    padding: '12px 24px',
+                    background: '#2196f3',
                     color: 'white',
                     border: 'none',
-                    borderRadius: '6px',
-                    fontSize: '12px',
+                    borderRadius: '8px',
+                    fontSize: '16px',
+                    fontWeight: '600',
                     cursor: 'pointer'
                   }}
                 >
-                  Auto-select best starter
+                  Deal Cards
                 </button>
               </div>
             )}
@@ -313,6 +303,80 @@ function App() {
               currentPlayerId={state.playerId || ''}
             />
           )}
+        </div>
+      )}
+
+      {state.screen === 'cards_dealt' && state.gameState && (
+        <div className="cards-dealt-screen">
+          <div className="game-header">
+            <h3>Room: {state.roomId}</h3>
+            <button onClick={handleLeaveRoom} className="leave-button">
+              Leave Game
+            </button>
+          </div>
+
+          <div className="cards-dealt-content">
+            <div className="your-cards">
+              <h3>Your Cards ({state.gameState.yourHand.length} cards)</h3>
+              <div className="hand">
+                {state.gameState.yourHand.map(card => (
+                  <div key={card.id} className="card preview">
+                    <div className="card-value">{card.value}</div>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            <div className="starting-player-selection">
+              <h3>Who should start first?</h3>
+              <p>Look at your cards and decide who has the best starting hand!</p>
+
+              <div className="player-selection">
+                {state.gameState.players.map(player => (
+                  <button
+                    key={player.id}
+                    onClick={() => handleSelectStartingPlayer(player.id)}
+                    style={{
+                      padding: '12px 20px',
+                      background: player.id === state.playerId ? '#2196f3' : '#f0f0f0',
+                      color: player.id === state.playerId ? 'white' : '#333',
+                      border: '2px solid #ddd',
+                      borderRadius: '8px',
+                      fontSize: '16px',
+                      fontWeight: '600',
+                      cursor: 'pointer',
+                      margin: '5px'
+                    }}
+                  >
+                    {player.name} {player.id === state.playerId ? '(You)' : ''} starts
+                  </button>
+                ))}
+              </div>
+
+              <div style={{ marginTop: '20px' }}>
+                <button
+                  onClick={() => handleSelectStartingPlayer('')}
+                  style={{
+                    padding: '8px 16px',
+                    background: '#666',
+                    color: 'white',
+                    border: 'none',
+                    borderRadius: '6px',
+                    fontSize: '14px',
+                    cursor: 'pointer'
+                  }}
+                >
+                  Auto-select best starter
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <Chat
+            messages={state.chatMessages}
+            onSendMessage={handleSendChat}
+            currentPlayerId={state.playerId || ''}
+          />
         </div>
       )}
 
