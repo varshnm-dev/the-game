@@ -51,6 +51,9 @@ export class GameClient {
   private currentPlayerId: string | null = null;
   private currentPlayerName: string | null = null;
 
+  // Track auto-rejoin process to avoid premature session clearing
+  private isAutoRejoining: boolean = false;
+
   // localStorage keys
   private readonly STORAGE_KEY = 'the-game-session';
 
@@ -123,6 +126,7 @@ export class GameClient {
         // Auto-rejoin room if we were in one before disconnection
         if (this.currentRoomId && this.currentPlayerId && this.currentPlayerName) {
           console.log(`Auto-rejoining room ${this.currentRoomId} as ${this.currentPlayerName}`);
+          this.isAutoRejoining = true;
           setTimeout(() => {
             this.joinRoom(this.currentRoomId!, this.currentPlayerName!);
           }, 100); // Small delay to ensure connection is fully established
@@ -226,6 +230,13 @@ export class GameClient {
         this.currentRoomId = message.roomId;
         this.currentPlayerId = message.playerId;
         this.saveSessionState();
+
+        // Clear auto-rejoin flag on successful join
+        if (this.isAutoRejoining) {
+          console.log('Auto-rejoin successful');
+          this.isAutoRejoining = false;
+        }
+
         this.emit('room_joined', {
           type: 'room_joined',
           roomId: message.roomId,
@@ -477,5 +488,10 @@ export class GameClient {
   // Method to manually clear session (useful for "New Game" functionality)
   clearSession(): void {
     this.clearSessionState();
+  }
+
+  // Check if currently in auto-rejoin process
+  isAutoRejoinInProgress(): boolean {
+    return this.isAutoRejoining;
   }
 }

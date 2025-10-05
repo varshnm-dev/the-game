@@ -42,6 +42,7 @@ function App() {
       const session = client.getPersistedSession();
       if (session) {
         console.log('Found persisted session, will auto-rejoin room:', session.roomId);
+        console.log('Session details:', session);
         setState(prev => ({
           ...prev,
           playerName: session.playerName,
@@ -49,6 +50,8 @@ function App() {
           roomId: session.roomId
         }));
       }
+    } else {
+      console.log('No persisted session found');
     }
 
     // Set up event handlers
@@ -62,6 +65,7 @@ function App() {
       },
 
       room_created: (event: GameClientEvent) => {
+        console.log('Room created event:', event);
         setState(prev => ({
           ...prev,
           screen: 'waiting',
@@ -73,6 +77,7 @@ function App() {
       },
 
       room_joined: (event: GameClientEvent) => {
+        console.log('Room joined event:', event);
         setState(prev => ({
           ...prev,
           screen: 'waiting',
@@ -127,9 +132,10 @@ function App() {
         const errorMessage = event.error || 'Unknown error';
         setState(prev => ({ ...prev, error: errorMessage }));
 
-        // If the error is about room not found and we have a persisted session,
-        // clear it and reset to setup screen
-        if (errorMessage.includes('Room not found') && state.gameClient.hasPersistedSession()) {
+        // Only clear session if we're not in the middle of auto-rejoining and the error is about room not found
+        if (errorMessage.includes('Room not found') &&
+            state.gameClient.hasPersistedSession() &&
+            !state.gameClient.isAutoRejoinInProgress()) {
           console.log('Persisted room no longer exists, clearing session');
           state.gameClient.clearSession();
           setState(prev => ({
@@ -143,6 +149,26 @@ function App() {
             chatMessages: [],
             error: 'Your previous game session has expired. Please start a new game.'
           }));
+        } else if (errorMessage.includes('Room not found') && state.gameClient.isAutoRejoinInProgress()) {
+          // If we get room not found during auto-rejoin, wait a bit before clearing session
+          console.log('Room not found during auto-rejoin, waiting before clearing session...');
+          setTimeout(() => {
+            if (state.gameClient.hasPersistedSession() && !state.gameClient.isConnected()) {
+              console.log('Auto-rejoin failed, clearing session');
+              state.gameClient.clearSession();
+              setState(prev => ({
+                ...prev,
+                screen: 'setup',
+                roomId: null,
+                playerId: null,
+                playerName: '',
+                players: [],
+                gameState: null,
+                chatMessages: [],
+                error: 'Your previous game session has expired. Please start a new game.'
+              }));
+            }
+          }, 5000); // Wait 5 seconds before giving up
         }
       },
 
