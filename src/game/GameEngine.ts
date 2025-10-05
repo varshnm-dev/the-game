@@ -86,6 +86,12 @@ export class GameEngine {
   }
 
   static canPlayCard(card: Card, pile: Pile): boolean {
+    // Special case: Any card can be played on piles at their starting values
+    if ((pile.type === 'ascending' && pile.currentValue === pile.startValue) ||
+        (pile.type === 'descending' && pile.currentValue === pile.startValue)) {
+      return true;
+    }
+
     if (pile.type === 'ascending') {
       return card.value > pile.currentValue || card.value === pile.currentValue - 10;
     } else {
@@ -212,26 +218,27 @@ export class GameEngine {
       const player = players[i];
       let score = 0;
 
-      // Count how many cards can be played immediately
-      for (const card of player.hand) {
-        for (const pile of piles) {
-          if (this.canPlayCard(card, pile)) {
-            score++;
-          }
-        }
-      }
-
-      // Bonus points for having extreme values (2, 3, 98, 99) which are great starting cards
+      // Since any card can be played initially, focus on strategic starting cards
+      // Bonus points for having extreme values (2, 3, 98, 99) which are excellent openers
       const extremeCards = player.hand.filter(card =>
         card.value <= 3 || card.value >= 98
       ).length;
-      score += extremeCards * 2;
+      score += extremeCards * 3;
 
-      // Bonus for having cards that can start chains (near pile starting values)
-      const chainStarters = player.hand.filter(card =>
-        card.value <= 10 || card.value >= 90
+      // Bonus for having cards near the middle (around 50) for flexibility
+      const middleCards = player.hand.filter(card =>
+        card.value >= 45 && card.value <= 55
       ).length;
-      score += chainStarters;
+      score += middleCards;
+
+      // Bonus for having good chain-starting cards
+      const lowChainStarters = player.hand.filter(card => card.value <= 15).length;
+      const highChainStarters = player.hand.filter(card => card.value >= 85).length;
+      score += (lowChainStarters + highChainStarters) * 2;
+
+      // Small bonus for having a diverse spread of cards
+      const cardSpread = Math.max(...player.hand.map(c => c.value)) - Math.min(...player.hand.map(c => c.value));
+      score += Math.floor(cardSpread / 20);
 
       if (score > bestScore) {
         bestScore = score;

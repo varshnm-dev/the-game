@@ -15,6 +15,12 @@ const GameBoard: React.FC<GameBoardProps> = ({ gameState, gameClient }) => {
   const isYourTurn = gameState.currentPlayerId === gameState.yourId;
 
   const canPlayCard = (card: Card, pile: Pile): boolean => {
+    // Special case: Any card can be played on piles at their starting values (1 or 100)
+    if ((pile.type === 'ascending' && pile.currentValue === 1) ||
+        (pile.type === 'descending' && pile.currentValue === 100)) {
+      return true;
+    }
+
     if (pile.type === 'ascending') {
       // For ascending piles: play higher cards OR exactly -10 for backward jump
       return card.value > pile.currentValue || card.value === pile.currentValue - 10;
