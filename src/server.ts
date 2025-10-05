@@ -33,7 +33,9 @@ class GameServer {
 
   private setupExpress() {
     this.app.use(cors({
-      origin: ['http://localhost:3000', 'http://localhost:3001', 'https://your-domain.com'],
+      origin: process.env.NODE_ENV === 'production'
+        ? [process.env.FRONTEND_URL, process.env.RENDER_EXTERNAL_URL].filter(Boolean)
+        : ['http://localhost:3000', 'http://localhost:3001'],
       credentials: true
     }));
     
@@ -378,7 +380,7 @@ class GameServer {
     }
   }
 
-  public start(port: number = 3001) {
+  public start(port: number = parseInt(process.env.PORT || '3001')) {
     this.server.listen(port, () => {
       console.log(`🎮 The Game Server running on port ${port}`);
       console.log(`📡 WebSocket server ready for connections`);
