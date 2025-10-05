@@ -52,22 +52,26 @@ export class GameEngine {
         const card = deck.pop();
         if (card) hand.push(card);
       }
-      
+
       return {
         id: data.id,
         name: data.name,
         connectionId: data.connectionId,
         hand: hand.sort((a, b) => a.value - b.value),
-        isCurrentPlayer: index === 0,
+        isCurrentPlayer: false, // Will be set below
         isConnected: true
       };
     });
+
+    // Determine starting player based on best opening moves
+    const startingPlayerIndex = this.determineStartingPlayer(players, piles);
+    players[startingPlayerIndex].isCurrentPlayer = true;
 
     return {
       id: roomId,
       status: 'playing',
       players,
-      currentPlayerId: players[0].id,
+      currentPlayerId: players[startingPlayerIndex].id,
       piles,
       deck,
       cardsPlayed: 0,
@@ -198,6 +202,44 @@ export class GameEngine {
 
   static hasValidMoves(player: ServerPlayer, piles: Pile[]): boolean {
     return player.hand.some(card => piles.some(pile => this.canPlayCard(card, pile)));
+  }
+
+  static determineStartingPlayer(players: ServerPlayer[], piles: Pile[]): number {
+    let bestPlayerIndex = 0;
+    let bestScore = -1;
+
+    for (let i = 0; i < players.length; i++) {
+      const player = players[i];
+      let score = 0;
+
+      // Count how many cards can be played immediately
+      for (const card of player.hand) {
+        for (const pile of piles) {
+          if (this.canPlayCard(card, pile)) {
+            score++;
+          }
+        }
+      }
+
+      // Bonus points for having extreme values (2, 3, 98, 99) which are great starting cards
+      const extremeCards = player.hand.filter(card =>
+        card.value <= 3 || card.value >= 98
+      ).length;
+      score += extremeCards * 2;
+
+      // Bonus for having cards that can start chains (near pile starting values)
+      const chainStarters = player.hand.filter(card =>
+        card.value <= 10 || card.value >= 90
+      ).length;
+      score += chainStarters;
+
+      if (score > bestScore) {
+        bestScore = score;
+        bestPlayerIndex = i;
+      }
+    }
+
+    return bestPlayerIndex;
   }
 
   static createClientGameState(serverState: ServerGameState, playerId: string): ClientGameState {

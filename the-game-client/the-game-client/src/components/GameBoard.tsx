@@ -16,8 +16,10 @@ const GameBoard: React.FC<GameBoardProps> = ({ gameState, gameClient }) => {
 
   const canPlayCard = (card: Card, pile: Pile): boolean => {
     if (pile.type === 'ascending') {
+      // For ascending piles: play higher cards OR exactly -10 for backward jump
       return card.value > pile.currentValue || card.value === pile.currentValue - 10;
     } else {
+      // For descending piles: play lower cards OR exactly +10 for backward jump
       return card.value < pile.currentValue || card.value === pile.currentValue + 10;
     }
   };
@@ -47,12 +49,19 @@ const GameBoard: React.FC<GameBoardProps> = ({ gameState, gameClient }) => {
   };
 
   const handlePileClick = (pile: Pile) => {
+    console.log('Pile clicked:', pile.id, 'Selected card:', selectedCard?.value, 'Is your turn:', isYourTurn);
+    console.log('Highlighted piles:', Array.from(highlightedPiles));
+    console.log('Can play card?', selectedCard && canPlayCard(selectedCard, pile));
+
     if (!isYourTurn || !selectedCard) return;
 
     if (highlightedPiles.has(pile.id)) {
+      console.log('Playing card:', selectedCard.id, 'on pile:', pile.id);
       gameClient.playCard(selectedCard.id, pile.id);
       setSelectedCard(null);
       setHighlightedPiles(new Set());
+    } else {
+      console.log('Pile not in highlighted piles');
     }
   };
 
