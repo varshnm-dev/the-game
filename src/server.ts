@@ -68,6 +68,18 @@ class GameServer {
       });
     });
 
+    // Start game endpoint
+    this.app.post('/api/room/:roomId/start', (req, res) => {
+      const roomId = req.params.roomId;
+      const success = this.startGame(roomId);
+
+      if (success) {
+        res.json({ success: true, message: 'Game started' });
+      } else {
+        res.status(400).json({ success: false, error: 'Could not start game' });
+      }
+    });
+
     // Create room
     this.app.post('/api/room', (req, res) => {
       const roomId = this.generateRoomId();
