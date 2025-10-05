@@ -44,6 +44,7 @@ export class GameClient {
   private reconnectAttempts = 0;
   private maxReconnectAttempts = 5;
   private reconnectDelay = 1000;
+  private pingInterval: NodeJS.Timeout | null = null;
 
   constructor(serverUrl: string = 'wss://the-game-kr4u.onrender.com') {
     this.serverUrl = serverUrl;
@@ -56,6 +57,7 @@ export class GameClient {
       this.ws.onopen = () => {
         console.log('Connected to game server');
         this.reconnectAttempts = 0;
+        this.startPingInterval();
         this.emit('connected', { type: 'connected' });
       };
 
@@ -70,6 +72,7 @@ export class GameClient {
 
       this.ws.onclose = () => {
         console.log('Disconnected from game server');
+        this.stopPingInterval();
         this.emit('disconnected', { type: 'disconnected' });
         this.attemptReconnect();
       };
@@ -85,9 +88,26 @@ export class GameClient {
   }
 
   disconnect(): void {
+    this.stopPingInterval();
     if (this.ws) {
       this.ws.close();
       this.ws = null;
+    }
+  }
+
+  private startPingInterval(): void {
+    // Send ping every 5 minutes to keep connection alive
+    this.pingInterval = setInterval(() => {
+      if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+        this.send({ type: 'ping' } as any);
+      }
+    }, 5 * 60 * 1000); // 5 minutes
+  }
+
+  private stopPingInterval(): void {
+    if (this.pingInterval) {
+      clearInterval(this.pingInterval);
+      this.pingInterval = null;
     }
   }
 
@@ -286,6 +306,24 @@ export class GameClient {
       return result.success;
     } catch (error) {
       console.error('Failed to start game:', error);
+      return false;
+    }
+  }
+
+  async startGameWithPlayer(roomId: string, startingPlayerId: string): Promise<boolean> {
+    try {
+      const response = await fetch(`${this.serverUrl.replace('wss://', 'https://').replace('ws://', 'http://')}/api/room/${roomId}/start`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ startingPlayerId })
+      });
+
+      const result = await response.json();
+      return result.success;
+    } catch (error) {
+      console.error('Failed to start game with specific player:', error);
       return false;
     }
   }

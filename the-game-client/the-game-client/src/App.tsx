@@ -171,6 +171,19 @@ function App() {
     }
   };
 
+  const handleStartGameWithPlayer = async (startingPlayerId: string) => {
+    if (!state.roomId) return;
+
+    try {
+      const success = await state.gameClient.startGameWithPlayer(state.roomId, startingPlayerId);
+      if (!success) {
+        setState(prev => ({ ...prev, error: 'Failed to start game' }));
+      }
+    } catch (error) {
+      setState(prev => ({ ...prev, error: 'Error starting game' }));
+    }
+  };
+
   const renderConnectionStatus = () => {
     const statusColors = {
       disconnected: '#ff4444',
@@ -253,23 +266,43 @@ function App() {
             <p><small>Share the room code <strong>{state.roomId}</strong> with your friends!</small></p>
 
             {state.players.length >= 1 && (
-              <button
-                className="start-game-button"
-                onClick={handleStartGame}
-                style={{
-                  marginTop: '20px',
-                  padding: '12px 24px',
-                  background: '#4caf50',
-                  color: 'white',
-                  border: 'none',
-                  borderRadius: '8px',
-                  fontSize: '16px',
-                  fontWeight: '600',
-                  cursor: 'pointer'
-                }}
-              >
-                Start Game ({state.players.length} player{state.players.length !== 1 ? 's' : ''})
-              </button>
+              <div style={{ marginTop: '20px' }}>
+                <p><strong>Who should start first?</strong></p>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', margin: '10px 0' }}>
+                  {state.players.map(player => (
+                    <button
+                      key={player.id}
+                      onClick={() => handleStartGameWithPlayer(player.id)}
+                      style={{
+                        padding: '10px 20px',
+                        background: player.id === state.playerId ? '#2196f3' : '#f0f0f0',
+                        color: player.id === state.playerId ? 'white' : '#333',
+                        border: '2px solid #ddd',
+                        borderRadius: '8px',
+                        fontSize: '14px',
+                        fontWeight: '600',
+                        cursor: 'pointer'
+                      }}
+                    >
+                      {player.name} {player.id === state.playerId ? '(You)' : ''} starts
+                    </button>
+                  ))}
+                </div>
+                <button
+                  onClick={handleStartGame}
+                  style={{
+                    padding: '8px 16px',
+                    background: '#666',
+                    color: 'white',
+                    border: 'none',
+                    borderRadius: '6px',
+                    fontSize: '12px',
+                    cursor: 'pointer'
+                  }}
+                >
+                  Auto-select best starter
+                </button>
+              </div>
             )}
           </div>
 

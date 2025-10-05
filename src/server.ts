@@ -71,7 +71,8 @@ class GameServer {
     // Start game endpoint
     this.app.post('/api/room/:roomId/start', (req, res) => {
       const roomId = req.params.roomId;
-      const success = this.startGame(roomId);
+      const { startingPlayerId } = req.body;
+      const success = this.startGame(roomId, startingPlayerId);
 
       if (success) {
         res.json({ success: true, message: 'Game started' });
@@ -142,6 +143,10 @@ class GameServer {
           break;
         case 'leave_room':
           this.handleLeaveRoom(ws, message);
+          break;
+        case 'ping':
+          // Keep-alive ping - just respond with pong
+          ws.send(JSON.stringify({ type: 'pong' }));
           break;
         default:
           ws.send(JSON.stringify({ type: 'error', error: 'Unknown message type' }));
@@ -369,7 +374,7 @@ class GameServer {
     }, 10 * 60 * 1000); // Check every 10 minutes
   }
 
-  public startGame(roomId: string): boolean {
+  public startGame(roomId: string, startingPlayerId?: string): boolean {
     const room = this.rooms.get(roomId);
     if (!room || room.isStarted || room.players.size < 1) {
       return false;
@@ -382,7 +387,7 @@ class GameServer {
         connectionId: p.id
       }));
 
-      room.gameState = GameEngine.initializeGame(roomId, playerData);
+      room.gameState = GameEngine.initializeGame(roomId, playerData, startingPlayerId);
       room.isStarted = true;
       room.lastActivity = Date.now();
 

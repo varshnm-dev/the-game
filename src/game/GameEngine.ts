@@ -37,7 +37,7 @@ export class GameEngine {
     return 6;
   }
 
-  static initializeGame(roomId: string, playerData: {id: string, name: string, connectionId: string}[]): ServerGameState {
+  static initializeGame(roomId: string, playerData: {id: string, name: string, connectionId: string}[], startingPlayerId?: string): ServerGameState {
     if (playerData.length < 1 || playerData.length > 5) {
       throw new Error('Invalid number of players');
     }
@@ -63,8 +63,16 @@ export class GameEngine {
       };
     });
 
-    // Determine starting player based on best opening moves
-    const startingPlayerIndex = this.determineStartingPlayer(players, piles);
+    // Determine starting player - use manual selection or auto-select
+    let startingPlayerIndex = 0;
+    if (startingPlayerId) {
+      const manualIndex = players.findIndex(p => p.id === startingPlayerId);
+      if (manualIndex !== -1) {
+        startingPlayerIndex = manualIndex;
+      }
+    } else {
+      startingPlayerIndex = this.determineStartingPlayer(players, piles);
+    }
     players[startingPlayerIndex].isCurrentPlayer = true;
 
     return {
