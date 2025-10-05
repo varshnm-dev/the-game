@@ -80,7 +80,7 @@ export interface ChatMessage {
 }
 
 export interface WebSocketMessage {
-  type: 'join_room' | 'create_room' | 'game_action' | 'chat_message' | 'leave_room' | 'select_starting_player';
+  type: 'join_room' | 'create_room' | 'game_action' | 'chat_message' | 'leave_room' | 'select_starting_player' | 'ping';
   roomId?: string;
   playerId?: string;
   playerName?: string;

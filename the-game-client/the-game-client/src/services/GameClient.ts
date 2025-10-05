@@ -46,6 +46,11 @@ export class GameClient {
   private reconnectDelay = 1000;
   private pingInterval: NodeJS.Timeout | null = null;
 
+  // Connection state for automatic rejoining
+  private currentRoomId: string | null = null;
+  private currentPlayerId: string | null = null;
+  private currentPlayerName: string | null = null;
+
   constructor(serverUrl: string = 'wss://the-game-kr4u.onrender.com') {
     this.serverUrl = serverUrl;
   }
@@ -59,6 +64,14 @@ export class GameClient {
         this.reconnectAttempts = 0;
         this.startPingInterval();
         this.emit('connected', { type: 'connected' });
+
+        // Auto-rejoin room if we were in one before disconnection
+        if (this.currentRoomId && this.currentPlayerId && this.currentPlayerName) {
+          console.log(`Auto-rejoining room ${this.currentRoomId} as ${this.currentPlayerName}`);
+          setTimeout(() => {
+            this.joinRoom(this.currentRoomId!, this.currentPlayerName!);
+          }, 100); // Small delay to ensure connection is fully established
+        }
       };
 
       this.ws.onmessage = (event) => {
@@ -96,12 +109,16 @@ export class GameClient {
   }
 
   private startPingInterval(): void {
-    // Send ping every 5 minutes to keep connection alive
+    // Send ping every 10 minutes to keep connection alive (less aggressive)
     this.pingInterval = setInterval(() => {
       if (this.ws && this.ws.readyState === WebSocket.OPEN) {
-        this.send({ type: 'ping' } as any);
+        try {
+          this.send({ type: 'ping' } as any);
+        } catch (error) {
+          console.warn('Failed to send ping:', error);
+        }
       }
-    }, 5 * 60 * 1000); // 5 minutes
+    }, 10 * 60 * 1000); // 10 minutes
   }
 
   private stopPingInterval(): void {
@@ -114,16 +131,32 @@ export class GameClient {
   private attemptReconnect(): void {
     if (this.reconnectAttempts < this.maxReconnectAttempts) {
       this.reconnectAttempts++;
+      const delay = Math.min(this.reconnectDelay * this.reconnectAttempts, 10000); // Max 10 second delay
       setTimeout(() => {
         console.log(`Attempting to reconnect... (${this.reconnectAttempts}/${this.maxReconnectAttempts})`);
-        this.connect();
-      }, this.reconnectDelay * this.reconnectAttempts);
+        try {
+          this.connect();
+        } catch (error) {
+          console.error('Reconnection attempt failed:', error);
+          // Try again after a delay
+          this.attemptReconnect();
+        }
+      }, delay);
+    } else {
+      console.error('Max reconnection attempts reached. Please refresh the page.');
+      this.emit('error', {
+        type: 'error',
+        error: 'Connection lost. Please refresh the page to reconnect.'
+      });
     }
   }
 
   private handleMessage(message: any): void {
     switch (message.type) {
       case 'room_created':
+        // Store room state for auto-rejoin
+        this.currentRoomId = message.roomId;
+        this.currentPlayerId = message.playerId;
         this.emit('room_created', {
           type: 'room_created',
           roomId: message.roomId,
@@ -133,6 +166,9 @@ export class GameClient {
         break;
 
       case 'room_joined':
+        // Store room state for auto-rejoin
+        this.currentRoomId = message.roomId;
+        this.currentPlayerId = message.playerId;
         this.emit('room_joined', {
           type: 'room_joined',
           roomId: message.roomId,
@@ -184,6 +220,10 @@ export class GameClient {
         });
         break;
 
+      case 'pong':
+        // Pong response to ping - just ignore it, connection is alive
+        break;
+
       default:
         console.warn('Unknown message type:', message.type);
     }
@@ -207,15 +247,25 @@ export class GameClient {
 
   private send(message: WebSocketMessage): void {
     if (this.ws && this.ws.readyState === WebSocket.OPEN) {
-      this.ws.send(JSON.stringify(message));
+      try {
+        this.ws.send(JSON.stringify(message));
+      } catch (error) {
+        console.error('Failed to send message:', error);
+        this.emit('error', { type: 'error', error: 'Failed to send message to server' });
+      }
     } else {
-      console.error('WebSocket not connected');
-      this.emit('error', { type: 'error', error: 'Not connected to server' });
+      console.warn('WebSocket not connected, message queued for after reconnection');
+      // For non-critical messages like ping, just ignore
+      if (message.type !== 'ping') {
+        this.emit('error', { type: 'error', error: 'Not connected to server' });
+      }
     }
   }
 
   createRoom(playerName: string): void {
     const playerId = this.generatePlayerId();
+    // Store player name for auto-rejoin
+    this.currentPlayerName = playerName;
     this.send({
       type: 'create_room',
       playerId,
@@ -224,7 +274,10 @@ export class GameClient {
   }
 
   joinRoom(roomId: string, playerName: string): void {
-    const playerId = this.generatePlayerId();
+    // For auto-rejoin, use existing playerId if available
+    const playerId = this.currentPlayerId || this.generatePlayerId();
+    // Store player name for auto-rejoin
+    this.currentPlayerName = playerName;
     this.send({
       type: 'join_room',
       roomId,
@@ -234,6 +287,10 @@ export class GameClient {
   }
 
   leaveRoom(): void {
+    // Clear stored room state when leaving
+    this.currentRoomId = null;
+    this.currentPlayerId = null;
+    this.currentPlayerName = null;
     this.send({
       type: 'leave_room'
     });

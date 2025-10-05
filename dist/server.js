@@ -145,13 +145,23 @@ class GameServer {
         if (!room) {
             return ws.send(JSON.stringify({ type: 'error', error: 'Room not found' }));
         }
-        if (room.players.size >= room.maxPlayers) {
+        const existingPlayer = room.players.get(playerId);
+        const isRejoining = !!existingPlayer;
+        if (!isRejoining && room.players.size >= room.maxPlayers) {
             return ws.send(JSON.stringify({ type: 'error', error: 'Room is full' }));
         }
-        // Add player to room
+        // Add or update player in room
         room.players.set(playerId, { id: playerId, name: playerName, ws });
         this.playerConnections.set(ws, { playerId, roomId });
         room.lastActivity = Date.now();
+        // If player was in game state, reconnect them to the game
+        if (room.gameState) {
+            const gamePlayer = room.gameState.players.find(p => p.id === playerId);
+            if (gamePlayer) {
+                gamePlayer.isConnected = true;
+                console.log(`Player ${playerName} (${playerId}) reconnected to game in room ${roomId}`);
+            }
+        }
         // Send success response
         ws.send(JSON.stringify({
             type: 'room_joined',
@@ -159,11 +169,22 @@ class GameServer {
             playerId,
             players: Array.from(room.players.values()).map(p => ({ id: p.id, name: p.name }))
         }));
-        // Notify other players
-        this.broadcastToRoom(roomId, {
-            type: 'player_joined',
-            player: { id: playerId, name: playerName }
-        }, playerId);
+        // If there's an active game, send current game state to rejoining player
+        if (room.gameState && isRejoining) {
+            const clientGameState = GameEngine_1.GameEngine.createClientGameState(room.gameState, playerId);
+            ws.send(JSON.stringify({
+                type: 'game_state_update',
+                gameState: clientGameState,
+                chatMessages: room.chatMessages
+            }));
+        }
+        // Notify other players (only if it's a new join, not a rejoin)
+        if (!isRejoining) {
+            this.broadcastToRoom(roomId, {
+                type: 'player_joined',
+                player: { id: playerId, name: playerName }
+            }, playerId);
+        }
     }
     handleCreateRoom(ws, message) {
         const { playerId, playerName } = message;
