@@ -1,0 +1,269 @@
+.chat {
+  background: white;
+  border-radius: 12px;
+  display: flex;
+  flex-direction: column;
+  height: 400px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+}
+
+.chat-header {
+  padding: 15px 20px;
+  border-bottom: 1px solid #e0e0e0;
+  background: #f8f9fa;
+  border-radius: 12px 12px 0 0;
+}
+
+.chat-header h4 {
+  margin: 0 0 8px 0;
+  color: #333;
+  font-size: 1.1rem;
+}
+
+.chat-rules {
+  margin: 0;
+}
+
+.chat-rules small {
+  color: #666;
+  font-style: italic;
+}
+
+.chat-messages {
+  flex: 1;
+  overflow-y: auto;
+  padding: 15px 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.empty-chat {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  text-align: center;
+  color: #666;
+}
+
+.empty-chat p {
+  margin: 0 0 20px 0;
+  font-size: 1rem;
+}
+
+.chat-suggestions {
+  background: #f0f7ff;
+  padding: 15px;
+  border-radius: 8px;
+  border: 1px solid #e3f2fd;
+  max-width: 300px;
+}
+
+.chat-suggestions p {
+  margin: 0 0 10px 0;
+  font-weight: 600;
+  color: #1976d2;
+}
+
+.chat-suggestions ul {
+  margin: 0;
+  padding-left: 20px;
+  text-align: left;
+}
+
+.chat-suggestions li {
+  margin-bottom: 5px;
+  font-size: 0.9rem;
+  color: #555;
+}
+
+.chat-message {
+  max-width: 80%;
+  margin-bottom: 12px;
+}
+
+.chat-message.own-message {
+  align-self: flex-end;
+}
+
+.chat-message.hint-message {
+  border-left: 4px solid #ff9800;
+  background: #fff8e1;
+}
+
+.message-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 4px;
+  font-size: 0.8rem;
+}
+
+.message-author {
+  font-weight: 600;
+  color: #333;
+}
+
+.message-time {
+  color: #999;
+}
+
+.hint-indicator {
+  background: #ff9800;
+  color: white;
+  padding: 2px 6px;
+  border-radius: 10px;
+  font-size: 0.7rem;
+  font-weight: 600;
+}
+
+.message-text {
+  background: #e3f2fd;
+  padding: 8px 12px;
+  border-radius: 12px;
+  color: #333;
+  line-height: 1.4;
+  word-wrap: break-word;
+}
+
+.own-message .message-text {
+  background: #1976d2;
+  color: white;
+}
+
+.hint-message .message-text {
+  background: #fff3e0;
+  border: 1px solid #ffcc02;
+}
+
+.own-message.hint-message .message-text {
+  background: #ff9800;
+  color: white;
+  border: 1px solid #f57c00;
+}
+
+.chat-input-form {
+  padding: 15px 20px;
+  border-top: 1px solid #e0e0e0;
+  background: #f8f9fa;
+  border-radius: 0 0 12px 12px;
+}
+
+.message-type-selector {
+  display: flex;
+  gap: 15px;
+  margin-bottom: 10px;
+}
+
+.message-type-option {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  font-size: 0.9rem;
+  color: #666;
+}
+
+.message-type-option input[type="radio"] {
+  margin: 0;
+}
+
+.message-type-option span {
+  transition: color 0.2s ease;
+}
+
+.message-type-option input[type="radio"]:checked + span {
+  color: #1976d2;
+  font-weight: 600;
+}
+
+.input-row {
+  display: flex;
+  gap: 10px;
+}
+
+.chat-input {
+  flex: 1;
+  padding: 10px 12px;
+  border: 2px solid #e0e0e0;
+  border-radius: 8px;
+  font-size: 14px;
+  transition: border-color 0.2s ease;
+}
+
+.chat-input:focus {
+  outline: none;
+  border-color: #1976d2;
+}
+
+.send-button {
+  padding: 10px 20px;
+  background: #1976d2;
+  color: white;
+  border: none;
+  border-radius: 8px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background-color 0.2s ease;
+}
+
+.send-button:hover:not(:disabled) {
+  background: #1565c0;
+}
+
+.send-button:disabled {
+  background: #cccccc;
+  cursor: not-allowed;
+}
+
+/* Scrollbar styling */
+.chat-messages::-webkit-scrollbar {
+  width: 6px;
+}
+
+.chat-messages::-webkit-scrollbar-track {
+  background: #f1f1f1;
+  border-radius: 3px;
+}
+
+.chat-messages::-webkit-scrollbar-thumb {
+  background: #c1c1c1;
+  border-radius: 3px;
+}
+
+.chat-messages::-webkit-scrollbar-thumb:hover {
+  background: #a8a8a8;
+}
+
+/* Responsive Design */
+@media (max-width: 768px) {
+  .chat {
+    height: 300px;
+  }
+
+  .chat-header,
+  .chat-input-form {
+    padding: 12px 15px;
+  }
+
+  .chat-messages {
+    padding: 12px 15px;
+  }
+
+  .message-type-selector {
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .input-row {
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .chat-input,
+  .send-button {
+    width: 100%;
+  }
+}

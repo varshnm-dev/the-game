@@ -1,0 +1,137 @@
+.player-list {
+  background: white;
+  border-radius: 12px;
+  padding: 20px;
+  margin-bottom: 20px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+}
+
+.player-list h4 {
+  margin: 0 0 15px 0;
+  color: #333;
+  font-size: 1.2rem;
+}
+
+.players {
+  margin-bottom: 20px;
+}
+
+.player {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 12px 16px;
+  margin-bottom: 8px;
+  border-radius: 8px;
+  background: #f8f9fa;
+  border: 2px solid transparent;
+  transition: all 0.2s ease;
+}
+
+.player.you {
+  background: #e3f2fd;
+  border-color: #2196f3;
+}
+
+.player.current-player {
+  background: #fff3e0;
+  border-color: #ff9800;
+  animation: pulse 2s infinite;
+}
+
+.player.disconnected {
+  background: #ffebee;
+  border-color: #f44336;
+  opacity: 0.7;
+}
+
+@keyframes pulse {
+  0% { box-shadow: 0 0 0 0 rgba(255, 152, 0, 0.4); }
+  70% { box-shadow: 0 0 0 10px rgba(255, 152, 0, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(255, 152, 0, 0); }
+}
+
+.player-info {
+  flex: 1;
+}
+
+.player-name {
+  font-weight: 600;
+  color: #333;
+  margin-bottom: 4px;
+}
+
+.player-details {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+}
+
+.hand-count {
+  font-size: 0.9rem;
+  color: #666;
+  background: rgba(0, 0, 0, 0.1);
+  padding: 2px 8px;
+  border-radius: 12px;
+}
+
+.disconnected-indicator {
+  font-size: 0.8rem;
+  color: #f44336;
+  font-weight: 600;
+}
+
+.current-player-indicator {
+  background: #ff9800;
+  color: white;
+  padding: 4px 12px;
+  border-radius: 20px;
+  font-size: 0.8rem;
+  font-weight: 600;
+  text-transform: uppercase;
+}
+
+.game-status {
+  border-top: 1px solid #e0e0e0;
+  padding-top: 15px;
+}
+
+.status-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 8px;
+}
+
+.status-item .label {
+  font-weight: 600;
+  color: #666;
+}
+
+.status-item .value {
+  font-weight: 600;
+}
+
+.status-waiting {
+  color: #ff9800;
+}
+
+.status-playing {
+  color: #4caf50;
+}
+
+.status-won {
+  color: #4caf50;
+  font-weight: bold;
+}
+
+.status-lost {
+  color: #f44336;
+  font-weight: bold;
+}
+
+.undo-available {
+  color: #2196f3;
+  font-weight: 600;
+  font-size: 0.9rem;
+}

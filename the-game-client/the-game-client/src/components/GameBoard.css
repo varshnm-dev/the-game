@@ -1,0 +1,393 @@
+.game-board {
+  padding: 20px;
+  max-width: 1000px;
+  margin: 0 auto;
+}
+
+.game-board.victory,
+.game-board.defeat {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 400px;
+}
+
+.victory-message,
+.defeat-message {
+  text-align: center;
+  padding: 40px;
+  border-radius: 16px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.1);
+}
+
+.victory-message {
+  background: linear-gradient(135deg, #4caf50, #8bc34a);
+  color: white;
+}
+
+.defeat-message {
+  background: linear-gradient(135deg, #f44336, #e57373);
+  color: white;
+}
+
+.victory-message h2,
+.defeat-message h2 {
+  margin: 0 0 15px 0;
+  font-size: 2.5rem;
+}
+
+.victory-message p,
+.defeat-message p {
+  margin: 0;
+  font-size: 1.2rem;
+  opacity: 0.9;
+}
+
+/* Game Status Bar */
+.game-status-bar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  background: white;
+  padding: 15px 20px;
+  border-radius: 12px;
+  margin-bottom: 20px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+}
+
+.your-turn {
+  color: #4caf50;
+  font-weight: bold;
+  font-size: 1.1rem;
+}
+
+.waiting-turn {
+  color: #ff9800;
+  font-weight: bold;
+  font-size: 1.1rem;
+}
+
+.cards-played {
+  margin-top: 5px;
+  font-size: 0.9rem;
+  color: #666;
+}
+
+.deck-count {
+  font-weight: 600;
+  color: #333;
+}
+
+.deck-empty {
+  color: #f44336;
+  font-weight: bold;
+}
+
+/* Piles */
+.piles-container {
+  margin-bottom: 30px;
+}
+
+.piles-section h3 {
+  margin: 0 0 15px 0;
+  color: #333;
+}
+
+.piles-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 15px;
+}
+
+.pile {
+  background: white;
+  border: 3px solid #e0e0e0;
+  border-radius: 12px;
+  padding: 20px;
+  text-align: center;
+  transition: all 0.2s ease;
+  cursor: default;
+}
+
+.pile.ascending {
+  border-color: #4caf50;
+}
+
+.pile.descending {
+  border-color: #2196f3;
+}
+
+.pile.highlighted {
+  border-color: #ff9800;
+  box-shadow: 0 0 0 2px rgba(255, 152, 0, 0.3);
+  transform: scale(1.02);
+}
+
+.pile.clickable {
+  cursor: pointer;
+}
+
+.pile.clickable:hover {
+  transform: scale(1.05);
+  box-shadow: 0 4px 16px rgba(255, 152, 0, 0.3);
+}
+
+.pile-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 15px;
+}
+
+.pile-type {
+  font-weight: 600;
+  font-size: 0.9rem;
+  color: #666;
+}
+
+.pile-target {
+  font-size: 0.8rem;
+  color: #999;
+}
+
+.pile-current-value {
+  font-size: 3rem;
+  font-weight: bold;
+  color: #333;
+  margin: 15px 0;
+}
+
+.pile.ascending .pile-current-value {
+  color: #4caf50;
+}
+
+.pile.descending .pile-current-value {
+  color: #2196f3;
+}
+
+.pile-cards-count {
+  font-size: 0.9rem;
+  color: #666;
+  margin-bottom: 10px;
+}
+
+.pile-preview {
+  background: #ff9800;
+  color: white;
+  padding: 8px 12px;
+  border-radius: 8px;
+  font-weight: 600;
+  font-size: 0.9rem;
+}
+
+/* Hand */
+.hand-container {
+  background: white;
+  border-radius: 12px;
+  padding: 20px;
+  margin-bottom: 20px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+}
+
+.hand-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 15px;
+}
+
+.hand-header h3 {
+  margin: 0;
+  color: #333;
+}
+
+.selected-card-info {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: #e3f2fd;
+  padding: 8px 16px;
+  border-radius: 8px;
+  font-weight: 600;
+  color: #1976d2;
+}
+
+.deselect-button {
+  background: none;
+  border: none;
+  color: #1976d2;
+  font-weight: bold;
+  cursor: pointer;
+  padding: 0;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background-color 0.2s ease;
+}
+
+.deselect-button:hover {
+  background-color: rgba(25, 118, 210, 0.1);
+}
+
+.hand {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  justify-content: center;
+}
+
+.card {
+  width: 60px;
+  height: 80px;
+  background: white;
+  border: 2px solid #e0e0e0;
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 1.2rem;
+  font-weight: bold;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  position: relative;
+}
+
+.card.playable {
+  border-color: #4caf50;
+  cursor: pointer;
+}
+
+.card.playable:hover {
+  transform: translateY(-5px);
+  box-shadow: 0 5px 15px rgba(76, 175, 80, 0.3);
+}
+
+.card.not-playable {
+  border-color: #f44336;
+  background-color: #ffebee;
+  opacity: 0.7;
+  cursor: not-allowed;
+}
+
+.card.selected {
+  border-color: #ff9800;
+  background-color: #fff3e0;
+  transform: translateY(-10px);
+  box-shadow: 0 8px 20px rgba(255, 152, 0, 0.3);
+}
+
+.card.disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.card-value {
+  color: #333;
+}
+
+.card-blocked {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  font-size: 0.8rem;
+}
+
+/* Action Buttons */
+.action-buttons {
+  display: flex;
+  gap: 15px;
+  justify-content: center;
+  margin-bottom: 20px;
+}
+
+.action-button {
+  padding: 12px 24px;
+  border: none;
+  border-radius: 8px;
+  font-size: 16px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.undo-button {
+  background: #2196f3;
+  color: white;
+}
+
+.undo-button:hover:not(:disabled) {
+  background: #1976d2;
+  transform: translateY(-2px);
+  box-shadow: 0 4px 12px rgba(33, 150, 243, 0.3);
+}
+
+.end-turn-button {
+  background: #4caf50;
+  color: white;
+}
+
+.end-turn-button:hover:not(:disabled) {
+  background: #45a049;
+  transform: translateY(-2px);
+  box-shadow: 0 4px 12px rgba(76, 175, 80, 0.3);
+}
+
+.action-button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+  transform: none;
+}
+
+/* Instructions */
+.instructions {
+  text-align: center;
+  background: #f8f9fa;
+  padding: 15px;
+  border-radius: 8px;
+  color: #666;
+  font-style: italic;
+}
+
+/* Responsive Design */
+@media (max-width: 768px) {
+  .game-board {
+    padding: 10px;
+  }
+
+  .game-status-bar {
+    flex-direction: column;
+    gap: 10px;
+    text-align: center;
+  }
+
+  .piles-grid {
+    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+    gap: 10px;
+  }
+
+  .pile {
+    padding: 15px;
+  }
+
+  .pile-current-value {
+    font-size: 2rem;
+  }
+
+  .hand {
+    gap: 8px;
+  }
+
+  .card {
+    width: 50px;
+    height: 70px;
+    font-size: 1rem;
+  }
+
+  .action-buttons {
+    flex-direction: column;
+    align-items: center;
+  }
+}
