@@ -7,8 +7,7 @@
     "start": "node dist/server.js",
     "dev": "ts-node src/server.ts",
     "build": "tsc",
-    "watch": "ts-node --watch src/server.ts",
-    "postinstall": "npm run build"
+    "watch": "ts-node --watch src/server.ts"
   },
   "dependencies": {
     "express": "^4.18.0",
