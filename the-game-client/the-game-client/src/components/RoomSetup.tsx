@@ -4,12 +4,18 @@ import './RoomSetup.css';
 interface RoomSetupProps {
   onCreateRoom: (playerName: string) => void;
   onJoinRoom: (roomId: string, playerName: string) => void;
+  onContinueGame?: (session: { roomId: string; playerId: string; playerName: string }) => void;
+  onNewGame?: () => void;
+  persistedSession?: { roomId: string; playerId: string; playerName: string } | null;
   isConnected: boolean;
 }
 
 const RoomSetup: React.FC<RoomSetupProps> = ({
   onCreateRoom,
   onJoinRoom,
+  onContinueGame,
+  onNewGame,
+  persistedSession,
   isConnected
 }) => {
   const [mode, setMode] = useState<'create' | 'join'>('create');
@@ -48,6 +54,18 @@ const RoomSetup: React.FC<RoomSetupProps> = ({
     }
   };
 
+  const handleContinueGame = () => {
+    if (persistedSession && onContinueGame) {
+      onContinueGame(persistedSession);
+    }
+  };
+
+  const handleNewGameClick = () => {
+    if (onNewGame) {
+      onNewGame();
+    }
+  };
+
   return (
     <div className="room-setup">
       <div className="room-setup-container">
@@ -55,6 +73,33 @@ const RoomSetup: React.FC<RoomSetupProps> = ({
           <h1>🎮 The Game</h1>
           <p>Cooperative card game for 1-5 players</p>
         </header>
+
+        {persistedSession && (
+          <div className="continue-game-section">
+            <h3>Continue Previous Game</h3>
+            <div className="continue-game-info">
+              <p><strong>Player:</strong> {persistedSession.playerName}</p>
+              <p><strong>Room:</strong> {persistedSession.roomId}</p>
+            </div>
+            <div className="continue-game-buttons">
+              <button
+                className="continue-button"
+                onClick={handleContinueGame}
+                disabled={!isConnected}
+              >
+                Continue Game
+              </button>
+              <button
+                className="new-game-button"
+                onClick={handleNewGameClick}
+                disabled={!isConnected}
+              >
+                Start New Game
+              </button>
+            </div>
+            <hr className="section-divider" />
+          </div>
+        )}
 
         <div className="mode-selector">
           <button

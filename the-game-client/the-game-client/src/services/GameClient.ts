@@ -51,8 +51,63 @@ export class GameClient {
   private currentPlayerId: string | null = null;
   private currentPlayerName: string | null = null;
 
+  // localStorage keys
+  private readonly STORAGE_KEY = 'the-game-session';
+
   constructor(serverUrl: string = 'wss://the-game-kr4u.onrender.com') {
     this.serverUrl = serverUrl;
+    // Restore session state from localStorage on initialization
+    this.loadSessionState();
+  }
+
+  private saveSessionState(): void {
+    if (this.currentRoomId && this.currentPlayerId && this.currentPlayerName) {
+      const sessionState = {
+        roomId: this.currentRoomId,
+        playerId: this.currentPlayerId,
+        playerName: this.currentPlayerName,
+        timestamp: Date.now()
+      };
+      try {
+        localStorage.setItem(this.STORAGE_KEY, JSON.stringify(sessionState));
+      } catch (error) {
+        console.warn('Failed to save session state:', error);
+      }
+    }
+  }
+
+  private loadSessionState(): void {
+    try {
+      const stored = localStorage.getItem(this.STORAGE_KEY);
+      if (stored) {
+        const sessionState = JSON.parse(stored);
+        // Check if session is not too old (expire after 24 hours)
+        const maxAge = 24 * 60 * 60 * 1000; // 24 hours
+        if (Date.now() - sessionState.timestamp < maxAge) {
+          this.currentRoomId = sessionState.roomId;
+          this.currentPlayerId = sessionState.playerId;
+          this.currentPlayerName = sessionState.playerName;
+          console.log('Restored session state from localStorage');
+        } else {
+          console.log('Session state expired, clearing');
+          this.clearSessionState();
+        }
+      }
+    } catch (error) {
+      console.warn('Failed to load session state:', error);
+      this.clearSessionState();
+    }
+  }
+
+  private clearSessionState(): void {
+    this.currentRoomId = null;
+    this.currentPlayerId = null;
+    this.currentPlayerName = null;
+    try {
+      localStorage.removeItem(this.STORAGE_KEY);
+    } catch (error) {
+      console.warn('Failed to clear session state:', error);
+    }
   }
 
   connect(): void {
@@ -154,9 +209,10 @@ export class GameClient {
   private handleMessage(message: any): void {
     switch (message.type) {
       case 'room_created':
-        // Store room state for auto-rejoin
+        // Store room state for auto-rejoin and persistence
         this.currentRoomId = message.roomId;
         this.currentPlayerId = message.playerId;
+        this.saveSessionState();
         this.emit('room_created', {
           type: 'room_created',
           roomId: message.roomId,
@@ -166,9 +222,10 @@ export class GameClient {
         break;
 
       case 'room_joined':
-        // Store room state for auto-rejoin
+        // Store room state for auto-rejoin and persistence
         this.currentRoomId = message.roomId;
         this.currentPlayerId = message.playerId;
+        this.saveSessionState();
         this.emit('room_joined', {
           type: 'room_joined',
           roomId: message.roomId,
@@ -291,6 +348,7 @@ export class GameClient {
     this.currentRoomId = null;
     this.currentPlayerId = null;
     this.currentPlayerName = null;
+    this.clearSessionState();
     this.send({
       type: 'leave_room'
     });
@@ -398,5 +456,26 @@ export class GameClient {
 
   isConnected(): boolean {
     return this.ws !== null && this.ws.readyState === WebSocket.OPEN;
+  }
+
+  // Public methods to access persisted session state
+  hasPersistedSession(): boolean {
+    return !!(this.currentRoomId && this.currentPlayerId && this.currentPlayerName);
+  }
+
+  getPersistedSession(): { roomId: string; playerId: string; playerName: string } | null {
+    if (this.hasPersistedSession()) {
+      return {
+        roomId: this.currentRoomId!,
+        playerId: this.currentPlayerId!,
+        playerName: this.currentPlayerName!
+      };
+    }
+    return null;
+  }
+
+  // Method to manually clear session (useful for "New Game" functionality)
+  clearSession(): void {
+    this.clearSessionState();
   }
 }

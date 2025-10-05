@@ -37,6 +37,20 @@ function App() {
   useEffect(() => {
     const client = state.gameClient;
 
+    // Check for persisted session and auto-rejoin if available
+    if (client.hasPersistedSession()) {
+      const session = client.getPersistedSession();
+      if (session) {
+        console.log('Found persisted session, will auto-rejoin room:', session.roomId);
+        setState(prev => ({
+          ...prev,
+          playerName: session.playerName,
+          playerId: session.playerId,
+          roomId: session.roomId
+        }));
+      }
+    }
+
     // Set up event handlers
     const handlers = {
       connected: () => {
@@ -110,7 +124,26 @@ function App() {
       },
 
       error: (event: GameClientEvent) => {
-        setState(prev => ({ ...prev, error: event.error || 'Unknown error' }));
+        const errorMessage = event.error || 'Unknown error';
+        setState(prev => ({ ...prev, error: errorMessage }));
+
+        // If the error is about room not found and we have a persisted session,
+        // clear it and reset to setup screen
+        if (errorMessage.includes('Room not found') && state.gameClient.hasPersistedSession()) {
+          console.log('Persisted room no longer exists, clearing session');
+          state.gameClient.clearSession();
+          setState(prev => ({
+            ...prev,
+            screen: 'setup',
+            roomId: null,
+            playerId: null,
+            playerName: '',
+            players: [],
+            gameState: null,
+            chatMessages: [],
+            error: 'Your previous game session has expired. Please start a new game.'
+          }));
+        }
       },
 
       game_error: (event: GameClientEvent) => {
@@ -157,6 +190,22 @@ function App() {
       gameState: null,
       chatMessages: [],
       error: null
+    }));
+  };
+
+  const handleNewGame = () => {
+    // Clear persisted session and start fresh
+    state.gameClient.clearSession();
+    handleLeaveRoom();
+  };
+
+  const handleContinueGame = (session: { roomId: string; playerId: string; playerName: string }) => {
+    // The GameClient will automatically rejoin on connection, so we just need to update the UI state
+    setState(prev => ({
+      ...prev,
+      playerName: session.playerName,
+      playerId: session.playerId,
+      roomId: session.roomId
     }));
   };
 
@@ -253,6 +302,9 @@ function App() {
         <RoomSetup
           onCreateRoom={handleCreateRoom}
           onJoinRoom={handleJoinRoom}
+          onContinueGame={handleContinueGame}
+          onNewGame={handleNewGame}
+          persistedSession={state.gameClient.getPersistedSession()}
           isConnected={state.connectionStatus === 'connected'}
         />
       )}
