@@ -1,0 +1,30 @@
+{
+  "name": "the-game-server",
+  "version": "1.0.0",
+  "description": "WebSocket server for The Game board game",
+  "main": "dist/server.js",
+  "scripts": {
+    "start": "node dist/server.js",
+    "dev": "ts-node src/server.ts",
+    "build": "tsc",
+    "watch": "ts-node --watch src/server.ts"
+  },
+  "dependencies": {
+    "express": "^4.18.0",
+    "ws": "^8.14.0",
+    "uuid": "^9.0.0",
+    "cors": "^2.8.5"
+  },
+  "devDependencies": {
+    "@types/express": "^4.17.0",
+    "@types/ws": "^8.5.0",
+    "@types/uuid": "^9.0.0",
+    "@types/cors": "^2.8.0",
+    "@types/node": "^18.0.0",
+    "ts-node": "^10.9.0",
+    "typescript": "^5.0.0"
+  },
+  "keywords": ["websocket", "game", "multiplayer", "board-game"],
+  "author": "Your Name",
+  "license": "MIT"
+}
