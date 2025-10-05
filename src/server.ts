@@ -32,10 +32,12 @@ class GameServer {
   }
 
   private setupExpress() {
+    const allowedOrigins = process.env.NODE_ENV === 'production'
+      ? [process.env.FRONTEND_URL, process.env.RENDER_EXTERNAL_URL].filter((url): url is string => Boolean(url))
+      : ['http://localhost:3000', 'http://localhost:3001'];
+
     this.app.use(cors({
-      origin: process.env.NODE_ENV === 'production'
-        ? [process.env.FRONTEND_URL, process.env.RENDER_EXTERNAL_URL].filter(Boolean)
-        : ['http://localhost:3000', 'http://localhost:3001'],
+      origin: allowedOrigins,
       credentials: true
     }));
     
