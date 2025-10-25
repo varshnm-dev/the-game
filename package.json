@@ -7,7 +7,8 @@
     "start": "node dist/server.js",
     "dev": "ts-node src/server.ts",
     "build": "tsc",
-    "watch": "ts-node --watch src/server.ts"
+    "watch": "ts-node --watch src/server.ts",
+    "test": "npm run build && node tests/roomRestoration.test.js"
   },
   "dependencies": {
     "@types/redis": "^4.0.10",
