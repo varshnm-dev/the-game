@@ -55,6 +55,7 @@ export interface RedisServiceLike {
   healthCheck(): Promise<{ connected: boolean; roomCount: number; error?: string }>;
 }
 
+
 export class RedisService implements RedisServiceLike {
   private client: RedisClientType;
   private connected: boolean = false;

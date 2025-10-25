@@ -32,6 +32,7 @@ interface GameRoom {
   lastActivity: number;
 }
 
+
 type PersistedRoomSnapshot = StoredRoomSnapshot | LegacyStoredRoomSnapshot;
 
 interface NormalizedRoomSnapshot {
@@ -678,6 +679,7 @@ class GameServer {
   }
 
   private async handlePlayerDisconnection(ws: WebSocket, options: { removeCompletely?: boolean } = {}) {
+
     const connection = this.playerConnections.get(ws);
     if (!connection) return;
 
@@ -693,7 +695,6 @@ class GameServer {
       if (player && shouldRemovePlayer) {
         room.players.delete(connection.playerId);
       }
-
       room.lastActivity = Date.now();
 
       // Mark player as disconnected in game state (but keep them for reconnection)
