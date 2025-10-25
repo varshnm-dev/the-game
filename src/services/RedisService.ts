@@ -21,7 +21,29 @@ export interface StoredRoomSnapshot {
   chatMessages: ChatMessage[];
 }
 
-export class RedisService {
+export interface RedisServiceLike {
+  connect(): Promise<void>;
+  disconnect(): Promise<void>;
+  isConnected(): boolean;
+  saveRoomMetadata(roomId: string, metadata: StoredRoomMetadata): Promise<boolean>;
+  getRoomMetadata(roomId: string): Promise<StoredRoomMetadata | null>;
+  savePlayers(roomId: string, players: StoredPlayer[]): Promise<boolean>;
+  getPlayers(roomId: string): Promise<StoredPlayer[]>;
+  saveGameState(roomId: string, gameState: ServerGameState): Promise<boolean>;
+  clearGameState(roomId: string): Promise<void>;
+  getGameState(roomId: string): Promise<ServerGameState | null>;
+  setChatMessages(roomId: string, messages: ChatMessage[]): Promise<boolean>;
+  appendChatMessage(roomId: string, message: ChatMessage): Promise<boolean>;
+  getChatMessages(roomId: string): Promise<ChatMessage[]>;
+  getRoom(roomId: string): Promise<StoredRoomSnapshot | null>;
+  deleteRoom(roomId: string): Promise<boolean>;
+  getAllActiveRooms(): Promise<string[]>;
+  updateRoomActivity(roomId: string): Promise<boolean>;
+  cleanupExpiredRooms(): Promise<number>;
+  healthCheck(): Promise<{ connected: boolean; roomCount: number; error?: string }>;
+}
+
+export class RedisService implements RedisServiceLike {
   private client: RedisClientType;
   private connected: boolean = false;
 
@@ -78,7 +100,6 @@ export class RedisService {
     return this.connected && this.client.isReady;
   }
 
-  // Room storage methods
   private metadataKey(roomId: string): string {
     return `room:${roomId}:metadata`;
   }
@@ -102,7 +123,6 @@ export class RedisService {
   async saveRoomMetadata(roomId: string, metadata: StoredRoomMetadata): Promise<boolean> {
     try {
       if (!this.isConnected()) {
-        // Attempt to reconnect if not connected
         try {
           await this.connect();
         } catch (reconnectError) {
@@ -125,7 +145,7 @@ export class RedisService {
       return true;
     } catch (error) {
       console.error(`Failed to save room metadata ${roomId}:`, error);
-      this.connected = false; // Mark as disconnected on error
+      this.connected = false;
       return false;
     }
   }
@@ -133,7 +153,6 @@ export class RedisService {
   async getRoomMetadata(roomId: string): Promise<StoredRoomMetadata | null> {
     try {
       if (!this.isConnected()) {
-        // Attempt to reconnect if not connected
         try {
           await this.connect();
         } catch (reconnectError) {
@@ -163,7 +182,7 @@ export class RedisService {
       return storedMetadata;
     } catch (error) {
       console.error(`Failed to get room metadata ${roomId}:`, error);
-      this.connected = false; // Mark as disconnected on error
+      this.connected = false;
       return null;
     }
   }
@@ -453,7 +472,6 @@ export class RedisService {
     }
   }
 
-  // Health check
   async healthCheck(): Promise<{ connected: boolean; roomCount: number; error?: string }> {
     try {
       if (!this.isConnected()) {
