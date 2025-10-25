@@ -1,11 +1,31 @@
 import { createClient, RedisClientType } from 'redis';
-import { ServerGameState } from '../types/game';
+import { ChatMessage, ServerGameState } from '../types/game';
 
-export interface StoredRoom {
+export interface StoredPlayer {
+  id: string;
+  name: string;
+}
+
+export interface StoredRoomMetadata {
+  id: string;
+  maxPlayers: number;
+  isStarted: boolean;
+  createdAt: number;
+  lastActivity: number;
+}
+
+export interface StoredRoomSnapshot {
+  metadata: StoredRoomMetadata;
+  players: StoredPlayer[];
+  gameState: ServerGameState | null;
+  chatMessages: ChatMessage[];
+}
+
+export interface LegacyStoredRoomSnapshot {
   id: string;
   gameState: ServerGameState | null;
-  players: Array<{ id: string; name: string }>;
-  chatMessages: any[];
+  players: StoredPlayer[];
+  chatMessages: ChatMessage[];
   maxPlayers: number;
   isStarted: boolean;
   createdAt: number;
@@ -14,13 +34,29 @@ export interface StoredRoom {
 
 export interface RedisServiceLike {
   connect(): Promise<void>;
-  saveRoom(roomId: string, room: StoredRoom): Promise<boolean>;
-  getRoom(roomId: string): Promise<StoredRoom | null>;
+  disconnect(): Promise<void>;
+  isConnected(): boolean;
+  saveRoomMetadata?(roomId: string, metadata: StoredRoomMetadata): Promise<boolean>;
+  getRoomMetadata?(roomId: string): Promise<StoredRoomMetadata | null>;
+  savePlayers?(roomId: string, players: StoredPlayer[]): Promise<boolean>;
+  getPlayers?(roomId: string): Promise<StoredPlayer[]>;
+  saveGameState?(roomId: string, gameState: ServerGameState): Promise<boolean>;
+  clearGameState?(roomId: string): Promise<void>;
+  getGameState?(roomId: string): Promise<ServerGameState | null>;
+  setChatMessages?(roomId: string, messages: ChatMessage[]): Promise<boolean>;
+  appendChatMessage?(roomId: string, message: ChatMessage): Promise<boolean>;
+  getChatMessages?(roomId: string): Promise<ChatMessage[]>;
+  saveRoom?(roomId: string, room: LegacyStoredRoomSnapshot): Promise<boolean>;
+  getRoom(roomId: string): Promise<StoredRoomSnapshot | LegacyStoredRoomSnapshot | null>;
+  deleteRoom?(roomId: string): Promise<boolean>;
+  getAllActiveRooms?(): Promise<string[]>;
+  updateRoomActivity?(roomId: string): Promise<boolean>;
   cleanupExpiredRooms(): Promise<number>;
   healthCheck(): Promise<{ connected: boolean; roomCount: number; error?: string }>;
 }
 
-export class RedisService {
+
+export class RedisService implements RedisServiceLike {
   private client: RedisClientType;
   private connected: boolean = false;
 
@@ -77,11 +113,29 @@ export class RedisService {
     return this.connected && this.client.isReady;
   }
 
-  // Room storage methods
-  async saveRoom(roomId: string, room: StoredRoom): Promise<boolean> {
+  private metadataKey(roomId: string): string {
+    return `room:${roomId}:metadata`;
+  }
+
+  private playersKey(roomId: string): string {
+    return `room:${roomId}:players`;
+  }
+
+  private gameStateKey(roomId: string): string {
+    return `room:${roomId}:gameState`;
+  }
+
+  private chatKey(roomId: string): string {
+    return `room:${roomId}:chat`;
+  }
+
+  private get expirySeconds(): number {
+    return 4 * 60 * 60; // 4 hours
+  }
+
+  async saveRoomMetadata(roomId: string, metadata: StoredRoomMetadata): Promise<boolean> {
     try {
       if (!this.isConnected()) {
-        // Attempt to reconnect if not connected
         try {
           await this.connect();
         } catch (reconnectError) {
@@ -90,28 +144,28 @@ export class RedisService {
         }
       }
 
-      const roomKey = `room:${roomId}`;
-      const roomData = JSON.stringify(room);
-
-      // Set room with 4 hour expiration (longer than the 2 hour cleanup)
-      await this.client.setEx(roomKey, 4 * 60 * 60, roomData);
-
-      // Also add to active rooms set for easier listing
+      const metadataKey = this.metadataKey(roomId);
+      await this.client.hSet(metadataKey, {
+        id: metadata.id,
+        maxPlayers: metadata.maxPlayers,
+        isStarted: metadata.isStarted ? 1 : 0,
+        createdAt: metadata.createdAt,
+        lastActivity: metadata.lastActivity
+      });
+      await this.client.expire(metadataKey, this.expirySeconds);
       await this.client.sAdd('active_rooms', roomId);
-
-      console.log(`💾 Room ${roomId} saved to Redis`);
+      console.log(`💾 Room ${roomId} metadata saved to Redis`);
       return true;
     } catch (error) {
-      console.error(`Failed to save room ${roomId}:`, error);
-      this.connected = false; // Mark as disconnected on error
+      console.error(`Failed to save room metadata ${roomId}:`, error);
+      this.connected = false;
       return false;
     }
   }
 
-  async getRoom(roomId: string): Promise<StoredRoom | null> {
+  async getRoomMetadata(roomId: string): Promise<StoredRoomMetadata | null> {
     try {
       if (!this.isConnected()) {
-        // Attempt to reconnect if not connected
         try {
           await this.connect();
         } catch (reconnectError) {
@@ -120,21 +174,253 @@ export class RedisService {
         }
       }
 
-      const roomKey = `room:${roomId}`;
-      const roomData = await this.client.get(roomKey);
+      const metadataKey = this.metadataKey(roomId);
+      const metadata = await this.client.hGetAll(metadataKey);
 
-      if (!roomData) {
+      if (!metadata || Object.keys(metadata).length === 0) {
         console.log(`🔍 Room ${roomId} not found in Redis`);
         return null;
       }
 
-      const room = JSON.parse(roomData) as StoredRoom;
-      console.log(`📥 Room ${roomId} loaded from Redis`);
-      return room;
+      const isStartedValue = metadata.isStarted;
+      const storedMetadata: StoredRoomMetadata = {
+        id: metadata.id || roomId,
+        maxPlayers: Number(metadata.maxPlayers ?? 0),
+        isStarted: isStartedValue === '1' || isStartedValue === 'true',
+        createdAt: Number(metadata.createdAt ?? Date.now()),
+        lastActivity: Number(metadata.lastActivity ?? Date.now())
+      };
+
+      console.log(`📥 Room ${roomId} metadata loaded from Redis`);
+      return storedMetadata;
     } catch (error) {
-      console.error(`Failed to get room ${roomId}:`, error);
-      this.connected = false; // Mark as disconnected on error
+      console.error(`Failed to get room metadata ${roomId}:`, error);
+      this.connected = false;
       return null;
+    }
+  }
+
+  async savePlayers(roomId: string, players: StoredPlayer[]): Promise<boolean> {
+    try {
+      if (!this.isConnected()) {
+        try {
+          await this.connect();
+        } catch (reconnectError) {
+          console.warn('Redis not connected and reconnection failed, cannot save players');
+          return false;
+        }
+      }
+
+      const key = this.playersKey(roomId);
+      await this.client.setEx(key, this.expirySeconds, JSON.stringify(players));
+      console.log(`💾 Room ${roomId} players saved to Redis`);
+      return true;
+    } catch (error) {
+      console.error(`Failed to save players for room ${roomId}:`, error);
+      this.connected = false;
+      return false;
+    }
+  }
+
+  async getPlayers(roomId: string): Promise<StoredPlayer[]> {
+    try {
+      if (!this.isConnected()) {
+        try {
+          await this.connect();
+        } catch (reconnectError) {
+          console.warn('Redis not connected and reconnection failed, cannot get players');
+          return [];
+        }
+      }
+
+      const key = this.playersKey(roomId);
+      const data = await this.client.get(key);
+      if (!data) {
+        return [];
+      }
+
+      return JSON.parse(data) as StoredPlayer[];
+    } catch (error) {
+      console.error(`Failed to get players for room ${roomId}:`, error);
+      this.connected = false;
+      return [];
+    }
+  }
+
+  async saveGameState(roomId: string, gameState: ServerGameState): Promise<boolean> {
+    try {
+      if (!this.isConnected()) {
+        try {
+          await this.connect();
+        } catch (reconnectError) {
+          console.warn('Redis not connected and reconnection failed, cannot save game state');
+          return false;
+        }
+      }
+
+      const key = this.gameStateKey(roomId);
+      await this.client.setEx(key, this.expirySeconds, JSON.stringify(gameState));
+      console.log(`💾 Room ${roomId} game state saved to Redis`);
+      return true;
+    } catch (error) {
+      console.error(`Failed to save game state for room ${roomId}:`, error);
+      this.connected = false;
+      return false;
+    }
+  }
+
+  async clearGameState(roomId: string): Promise<void> {
+    try {
+      if (!this.isConnected()) {
+        return;
+      }
+      await this.client.del(this.gameStateKey(roomId));
+    } catch (error) {
+      console.error(`Failed to clear game state for room ${roomId}:`, error);
+    }
+  }
+
+  async getGameState(roomId: string): Promise<ServerGameState | null> {
+    try {
+      if (!this.isConnected()) {
+        try {
+          await this.connect();
+        } catch (reconnectError) {
+          console.warn('Redis not connected and reconnection failed, cannot get game state');
+          return null;
+        }
+      }
+
+      const key = this.gameStateKey(roomId);
+      const data = await this.client.get(key);
+      if (!data) {
+        return null;
+      }
+
+      return JSON.parse(data) as ServerGameState;
+    } catch (error) {
+      console.error(`Failed to get game state for room ${roomId}:`, error);
+      this.connected = false;
+      return null;
+    }
+  }
+
+  async setChatMessages(roomId: string, messages: ChatMessage[]): Promise<boolean> {
+    try {
+      if (!this.isConnected()) {
+        try {
+          await this.connect();
+        } catch (reconnectError) {
+          console.warn('Redis not connected and reconnection failed, cannot save chat');
+          return false;
+        }
+      }
+
+      const key = this.chatKey(roomId);
+      const pipeline = this.client.multi();
+      pipeline.del(key);
+      if (messages.length > 0) {
+        pipeline.rPush(key, messages.map(msg => JSON.stringify(msg)));
+      }
+      pipeline.expire(key, this.expirySeconds);
+      await pipeline.exec();
+      console.log(`💾 Room ${roomId} chat log saved to Redis`);
+      return true;
+    } catch (error) {
+      console.error(`Failed to save chat log for room ${roomId}:`, error);
+      this.connected = false;
+      return false;
+    }
+  }
+
+  async appendChatMessage(roomId: string, message: ChatMessage): Promise<boolean> {
+    try {
+      if (!this.isConnected()) {
+        try {
+          await this.connect();
+        } catch (reconnectError) {
+          console.warn('Redis not connected and reconnection failed, cannot append chat message');
+          return false;
+        }
+      }
+
+      const key = this.chatKey(roomId);
+      const pipeline = this.client.multi();
+      pipeline.rPush(key, JSON.stringify(message));
+      pipeline.lTrim(key, -100, -1);
+      pipeline.expire(key, this.expirySeconds);
+      await pipeline.exec();
+      return true;
+    } catch (error) {
+      console.error(`Failed to append chat message for room ${roomId}:`, error);
+      this.connected = false;
+      return false;
+    }
+  }
+
+  async getChatMessages(roomId: string): Promise<ChatMessage[]> {
+    try {
+      if (!this.isConnected()) {
+        try {
+          await this.connect();
+        } catch (reconnectError) {
+          console.warn('Redis not connected and reconnection failed, cannot get chat messages');
+          return [];
+        }
+      }
+
+      const key = this.chatKey(roomId);
+      const messages = await this.client.lRange(key, 0, -1);
+      return messages.map(msg => JSON.parse(msg) as ChatMessage);
+    } catch (error) {
+      console.error(`Failed to get chat messages for room ${roomId}:`, error);
+      this.connected = false;
+      return [];
+    }
+  }
+
+  async getRoom(roomId: string): Promise<StoredRoomSnapshot | LegacyStoredRoomSnapshot | null> {
+    const metadata = await this.getRoomMetadata(roomId);
+    if (!metadata) {
+      return null;
+    }
+
+    const [players, gameState, chatMessages] = await Promise.all([
+      this.getPlayers(roomId),
+      this.getGameState(roomId),
+      this.getChatMessages(roomId)
+    ]);
+
+    return {
+      metadata,
+      players,
+      gameState,
+      chatMessages
+    };
+  }
+
+  async saveRoom(roomId: string, room: LegacyStoredRoomSnapshot): Promise<boolean> {
+    try {
+      const metadata: StoredRoomMetadata = {
+        id: room.id,
+        maxPlayers: room.maxPlayers,
+        isStarted: room.isStarted,
+        createdAt: room.createdAt,
+        lastActivity: room.lastActivity
+      };
+
+      const operations: Promise<unknown>[] = [
+        this.saveRoomMetadata(roomId, metadata),
+        this.savePlayers(roomId, room.players),
+        room.gameState ? this.saveGameState(roomId, room.gameState) : this.clearGameState(roomId),
+        this.setChatMessages(roomId, room.chatMessages)
+      ];
+
+      const results = await Promise.all(operations);
+      return results.every(result => result !== false);
+    } catch (error) {
+      console.error(`Failed to save legacy room ${roomId}:`, error);
+      return false;
     }
   }
 
@@ -145,8 +431,13 @@ export class RedisService {
         return false;
       }
 
-      const roomKey = `room:${roomId}`;
-      const deleted = await this.client.del(roomKey);
+      const deletedCounts = await Promise.all([
+        this.client.del(this.metadataKey(roomId)),
+        this.client.del(this.playersKey(roomId)),
+        this.client.del(this.gameStateKey(roomId)),
+        this.client.del(this.chatKey(roomId))
+      ]);
+      const deleted = deletedCounts.reduce((sum, count) => sum + count, 0);
       await this.client.sRem('active_rooms', roomId);
 
       if (deleted > 0) {
@@ -180,10 +471,10 @@ export class RedisService {
         return false;
       }
 
-      const room = await this.getRoom(roomId);
-      if (room) {
-        room.lastActivity = Date.now();
-        return await this.saveRoom(roomId, room);
+      const metadata = await this.getRoomMetadata(roomId);
+      if (metadata) {
+        metadata.lastActivity = Date.now();
+        return await this.saveRoomMetadata(roomId, metadata);
       }
       return false;
     } catch (error) {
@@ -204,8 +495,8 @@ export class RedisService {
       const TIMEOUT = 2 * 60 * 60 * 1000; // 2 hours
 
       for (const roomId of activeRoomIds) {
-        const room = await this.getRoom(roomId);
-        if (room && (now - room.lastActivity) > TIMEOUT) {
+        const metadata = await this.getRoomMetadata(roomId);
+        if (metadata && (now - metadata.lastActivity) > TIMEOUT) {
           await this.deleteRoom(roomId);
           cleanedCount++;
           console.log(`🧹 Cleaned up expired room: ${roomId}`);
@@ -219,7 +510,6 @@ export class RedisService {
     }
   }
 
-  // Health check
   async healthCheck(): Promise<{ connected: boolean; roomCount: number; error?: string }> {
     try {
       if (!this.isConnected()) {

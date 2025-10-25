@@ -104,7 +104,7 @@ class GameServer {
                 lastActivity: Date.now()
             };
             this.rooms.set(roomId, room);
-            await this.saveRoomToRedis(room);
+            await this.persistRoom(room, { chat: false });
             console.log(`✅ Room ${roomId} created and saved`);
             res.json({ roomId });
         });
@@ -118,44 +118,161 @@ class GameServer {
             console.error('😱 Failed to connect to Redis, continuing without persistence:', error);
         }
     }
-    async saveRoomToRedis(room) {
-        try {
-            const storedRoom = {
-                id: room.id,
-                gameState: room.gameState,
-                players: Array.from(room.players.values()).map(p => ({ id: p.id, name: p.name })),
-                chatMessages: room.chatMessages,
-                maxPlayers: room.maxPlayers,
-                isStarted: room.isStarted,
-                createdAt: room.createdAt,
-                lastActivity: room.lastActivity
+    getStoredPlayers(room) {
+        return Array.from(room.players.values()).map(player => ({ id: player.id, name: player.name }));
+    }
+    supportsStructuredPersistence(service) {
+        return (typeof service.saveRoomMetadata === 'function' &&
+            typeof service.savePlayers === 'function' &&
+            typeof service.saveGameState === 'function' &&
+            typeof service.clearGameState === 'function' &&
+            typeof service.setChatMessages === 'function');
+    }
+    hasLegacyRoomPersistence(service) {
+        return typeof service.saveRoom === 'function';
+    }
+    isStructuredSnapshot(snapshot) {
+        return snapshot.metadata !== undefined;
+    }
+    normalizeSnapshot(snapshot) {
+        if (this.isStructuredSnapshot(snapshot)) {
+            return {
+                metadata: snapshot.metadata,
+                players: snapshot.players ?? [],
+                gameState: snapshot.gameState ?? null,
+                chatMessages: snapshot.chatMessages ?? []
             };
-            await this.redisService.saveRoom(room.id, storedRoom);
+        }
+        return {
+            metadata: {
+                id: snapshot.id,
+                maxPlayers: snapshot.maxPlayers ?? snapshot.players?.length ?? 0,
+                isStarted: snapshot.isStarted ?? false,
+                createdAt: snapshot.createdAt ?? Date.now(),
+                lastActivity: snapshot.lastActivity ?? Date.now()
+            },
+            players: snapshot.players ?? [],
+            gameState: snapshot.gameState ?? null,
+            chatMessages: snapshot.chatMessages ?? []
+        };
+    }
+    buildLegacySnapshot(room) {
+        return {
+            id: room.id,
+            gameState: room.gameState,
+            players: this.getStoredPlayers(room),
+            chatMessages: room.chatMessages,
+            maxPlayers: room.maxPlayers,
+            isStarted: room.isStarted,
+            createdAt: room.createdAt,
+            lastActivity: room.lastActivity
+        };
+    }
+    async persistRoom(room, options) {
+        const persistOptions = {
+            metadata: true,
+            players: true,
+            gameState: true,
+            chat: true,
+            ...options
+        };
+        try {
+            if (this.supportsStructuredPersistence(this.redisService)) {
+                const operations = [];
+                if (persistOptions.metadata) {
+                    const metadata = {
+                        id: room.id,
+                        maxPlayers: room.maxPlayers,
+                        isStarted: room.isStarted,
+                        createdAt: room.createdAt,
+                        lastActivity: room.lastActivity
+                    };
+                    operations.push(this.redisService.saveRoomMetadata(room.id, metadata));
+                }
+                if (persistOptions.players) {
+                    operations.push(this.redisService.savePlayers(room.id, this.getStoredPlayers(room)));
+                }
+                if (persistOptions.gameState) {
+                    if (room.gameState) {
+                        operations.push(this.redisService.saveGameState(room.id, room.gameState));
+                    }
+                    else {
+                        operations.push(this.redisService.clearGameState(room.id));
+                    }
+                }
+                if (persistOptions.chat) {
+                    operations.push(this.redisService.setChatMessages(room.id, room.chatMessages));
+                }
+                await Promise.all(operations);
+            }
+            else if (this.hasLegacyRoomPersistence(this.redisService)) {
+                if (persistOptions.metadata || persistOptions.players || persistOptions.gameState || persistOptions.chat) {
+                    await this.redisService.saveRoom(room.id, this.buildLegacySnapshot(room));
+                }
+            }
         }
         catch (error) {
-            console.error(`Failed to save room ${room.id} to Redis:`, error);
+            console.error(`Failed to persist room ${room.id}:`, error);
         }
     }
-    async restoreRoomFromStorage(storedRoom) {
+    async restoreRoomFromStorage(snapshot) {
         try {
+            const normalized = this.normalizeSnapshot(snapshot);
             const room = {
-                id: storedRoom.id,
-                gameState: storedRoom.gameState,
-                players: new Map(storedRoom.players.map(p => [p.id, { id: p.id, name: p.name }])),
+                id: normalized.metadata.id,
+                gameState: normalized.gameState,
+                players: new Map(normalized.players.map(player => [player.id, { id: player.id, name: player.name }])),
                 connections: new Map(),
-                chatMessages: storedRoom.chatMessages,
-                maxPlayers: storedRoom.maxPlayers,
-                isStarted: storedRoom.isStarted,
-                createdAt: storedRoom.createdAt,
-                lastActivity: storedRoom.lastActivity
+                chatMessages: normalized.chatMessages,
+                maxPlayers: normalized.metadata.maxPlayers,
+                isStarted: normalized.metadata.isStarted,
+                createdAt: normalized.metadata.createdAt,
+                lastActivity: normalized.metadata.lastActivity
             };
             this.rooms.set(room.id, room);
             console.log(`📦 Room ${room.id} restored from storage`);
             return room;
         }
         catch (error) {
-            console.error(`Failed to restore room ${storedRoom.id}:`, error);
+            const id = this.isStructuredSnapshot(snapshot) ? snapshot.metadata.id : snapshot.id;
+            console.error(`Failed to restore room ${id}:`, error);
             return null;
+        }
+    }
+    async hydrateRoomFromPersistence(room) {
+        try {
+            const snapshot = await this.redisService.getRoom(room.id);
+            if (!snapshot) {
+                return;
+            }
+            const normalized = this.normalizeSnapshot(snapshot);
+            room.maxPlayers = normalized.metadata.maxPlayers;
+            room.isStarted = normalized.metadata.isStarted;
+            room.createdAt = normalized.metadata.createdAt;
+            room.lastActivity = normalized.metadata.lastActivity;
+            room.chatMessages = normalized.chatMessages;
+            room.gameState = normalized.gameState;
+            const playersFromSnapshot = new Map();
+            normalized.players.forEach((storedPlayer) => {
+                playersFromSnapshot.set(storedPlayer.id, { id: storedPlayer.id, name: storedPlayer.name });
+            });
+            // Preserve any players currently connected but not yet persisted
+            room.players.forEach((player, playerId) => {
+                if (!playersFromSnapshot.has(playerId)) {
+                    playersFromSnapshot.set(playerId, player);
+                }
+            });
+            room.players = playersFromSnapshot;
+            // Drop stale connections for players no longer present
+            room.connections.forEach((socket, playerId) => {
+                if (!room.players.has(playerId)) {
+                    this.playerConnections.delete(socket);
+                    room.connections.delete(playerId);
+                }
+            });
+        }
+        catch (error) {
+            console.error(`Failed to hydrate room ${room.id} from persistence:`, error);
         }
     }
     setupWebSocket() {
@@ -238,6 +355,7 @@ class GameServer {
             console.log(`❌ Room ${roomId} not found anywhere`);
             return ws.send(JSON.stringify({ type: 'error', error: 'Room not found' }));
         }
+        await this.hydrateRoomFromPersistence(room);
         const existingPlayer = room.players.get(playerId);
         const isRejoining = !!existingPlayer;
         if (!isRejoining && room.players.size >= room.maxPlayers) {
@@ -251,10 +369,12 @@ class GameServer {
         room.lastActivity = Date.now();
         console.log(`✅ Player ${playerName} ${isRejoining ? 'rejoined' : 'joined'} room ${roomId}`);
         // If player was in game state, reconnect them to the game
+        let playerInGame = false;
         if (room.gameState) {
             const gamePlayer = room.gameState.players.find(p => p.id === playerId);
             if (gamePlayer) {
                 gamePlayer.isConnected = true;
+                playerInGame = true;
                 console.log(`🔄 Player ${playerName} (${playerId}) reconnected to ongoing game in room ${roomId}`);
                 // Notify other connected players that this player has reconnected
                 this.broadcastToRoom(roomId, {
@@ -264,6 +384,7 @@ class GameServer {
                 }, playerId);
             }
         }
+        await this.persistRoom(room, { chat: false });
         // Send success response
         ws.send(JSON.stringify({
             type: 'room_joined',
@@ -271,8 +392,8 @@ class GameServer {
             playerId,
             players: Array.from(room.players.values()).map(p => ({ id: p.id, name: p.name }))
         }));
-        // If there's an active game, send current game state to rejoining player
-        if (room.gameState && isRejoining) {
+        // If there's an active game, send current game state to the player
+        if (room.gameState && playerInGame) {
             console.log(`🎮 Sending game state to rejoining player ${playerName}`);
             const clientGameState = GameEngine_1.GameEngine.createClientGameState(room.gameState, playerId);
             ws.send(JSON.stringify({
@@ -281,8 +402,6 @@ class GameServer {
                 chatMessages: room.chatMessages
             }));
         }
-        // Save room state to Redis after player joins
-        await this.saveRoomToRedis(room);
         // Notify other players (only if it's a new join, not a rejoin)
         if (!isRejoining) {
             console.log(`📢 Notifying other players about ${playerName} joining room ${roomId}`);
@@ -316,7 +435,7 @@ class GameServer {
         room.connections.set(playerId, ws);
         this.playerConnections.set(ws, { playerId, roomId });
         this.rooms.set(roomId, room);
-        await this.saveRoomToRedis(room);
+        await this.persistRoom(room);
         console.log(`✅ Room ${roomId} created by ${playerName}`);
         ws.send(JSON.stringify({
             type: 'room_created',
@@ -360,8 +479,8 @@ class GameServer {
             }
             room.gameState = newGameState;
             room.lastActivity = Date.now();
-            // Save updated game state to Redis
-            await this.saveRoomToRedis(room);
+            // Save updated game state to Redis before broadcasting
+            await this.persistRoom(room, { chat: false });
             // Broadcast updated game state to all players
             this.broadcastGameState(connection.roomId);
         }
@@ -386,22 +505,36 @@ class GameServer {
             playerId: connection.playerId,
             timestamp: Date.now()
         };
-        room.chatMessages.push(chatMessage);
-        room.lastActivity = Date.now();
-        // Keep only last 100 messages
-        if (room.chatMessages.length > 100) {
-            room.chatMessages = room.chatMessages.slice(-100);
-        }
         console.log(`💬 Chat message from ${connection.playerId} in room ${connection.roomId}`);
-        // Save updated chat to Redis
-        await this.saveRoomToRedis(room);
+        const appendChat = this.redisService.appendChatMessage?.bind(this.redisService);
+        let appended = false;
+        if (appendChat) {
+            appended = await appendChat(connection.roomId, chatMessage);
+        }
+        if (appended) {
+            const fetchChatMessages = this.redisService.getChatMessages?.bind(this.redisService);
+            if (fetchChatMessages) {
+                room.chatMessages = await fetchChatMessages(connection.roomId);
+            }
+            else {
+                room.chatMessages.push(chatMessage);
+            }
+        }
+        else {
+            room.chatMessages.push(chatMessage);
+            if (room.chatMessages.length > 100) {
+                room.chatMessages = room.chatMessages.slice(-100);
+            }
+        }
+        room.lastActivity = Date.now();
+        await this.persistRoom(room, { gameState: false, chat: !appended });
         this.broadcastToRoom(connection.roomId, {
             type: 'chat_message',
             message: chatMessage
         });
     }
     async handleLeaveRoom(ws, message) {
-        await this.handlePlayerDisconnection(ws, { removeFromRoom: true });
+        await this.handlePlayerDisconnection(ws, { removeCompletely: true });
     }
     async handleSelectStartingPlayer(ws, message) {
         const connection = this.playerConnections.get(ws);
@@ -426,8 +559,9 @@ class GameServer {
         if (room) {
             const player = room.players.get(connection.playerId);
             const playerName = player?.name || 'Unknown';
+            const shouldRemovePlayer = options.removeCompletely || !room.gameState;
             room.connections.delete(connection.playerId);
-            if (options.removeFromRoom) {
+            if (player && shouldRemovePlayer) {
                 room.players.delete(connection.playerId);
             }
             room.lastActivity = Date.now();
@@ -445,14 +579,15 @@ class GameServer {
                     });
                 }
             }
-            else if (options.removeFromRoom) {
-                // If no game state and player intentionally left, notify others
+            else if (shouldRemovePlayer) {
+                // If no game state and player left entirely, notify about player leaving
                 this.broadcastToRoom(connection.roomId, {
                     type: 'player_left',
                     playerId: connection.playerId
                 });
             }
             else {
+                // Before the game starts, treat disconnects as temporary
                 this.broadcastToRoom(connection.roomId, {
                     type: 'player_disconnected',
                     playerId: connection.playerId,
@@ -460,15 +595,16 @@ class GameServer {
                 });
             }
             // Update room in Redis with current state
-            await this.saveRoomToRedis(room);
+            await this.persistRoom(room, { chat: false });
             // Only remove from memory if no active game or all players disconnected
             // Keep rooms with active games in memory for better performance
-            if (room.players.size === 0 && (!room.gameState || room.gameState.status === 'waiting')) {
+            const connectedPlayers = Array.from(room.connections.values()).filter(socket => socket.readyState === ws_1.default.OPEN).length;
+            if (connectedPlayers === 0 && (!room.gameState || room.gameState.status === 'waiting')) {
                 console.log(`🧹 Room ${connection.roomId} now empty and no active game, removing from memory but keeping in Redis`);
                 this.rooms.delete(connection.roomId);
             }
-            else if (room.connections.size === 0 && room.gameState) {
-                console.log(`🔄 Room ${connection.roomId} has no connected players but has active game - keeping in memory for reconnection`);
+            else if (connectedPlayers === 0 && room.gameState) {
+                console.log(`🔄 Room ${connection.roomId} empty but has active game - keeping in memory for reconnection`);
             }
         }
         this.playerConnections.delete(ws);
@@ -479,6 +615,9 @@ class GameServer {
             if (!socket || socket.readyState !== ws_1.default.OPEN) {
                 if (!socket || socket.readyState === ws_1.default.CLOSING || socket.readyState === ws_1.default.CLOSED) {
                     disconnectedPlayers.push(playerId);
+                    if (socket) {
+                        this.playerConnections.delete(socket);
+                    }
                 }
                 return;
             }
@@ -519,7 +658,7 @@ class GameServer {
         return id;
     }
     startCleanupTimer() {
-        setInterval(async () => {
+        this.cleanupInterval = setInterval(async () => {
             console.log(`🧹 Starting cleanup check...`);
             const now = Date.now();
             const TIMEOUT = 2 * 60 * 60 * 1000; // 2 hours
@@ -547,15 +686,24 @@ class GameServer {
             return false;
         }
         try {
-            const playerData = Array.from(room.players.values()).map(p => ({
-                id: p.id,
-                name: p.name,
-                connectionId: p.id
-            }));
+            const playerData = Array.from(room.connections.entries())
+                .filter(([, socket]) => socket.readyState === ws_1.default.OPEN)
+                .map(([playerId]) => {
+                const player = room.players.get(playerId);
+                if (!player) {
+                    return null;
+                }
+                return {
+                    id: player.id,
+                    name: player.name,
+                    connectionId: player.id
+                };
+            })
+                .filter((player) => player !== null);
             room.gameState = GameEngine_1.GameEngine.initializeGame(roomId, playerData);
             room.isStarted = true;
             room.lastActivity = Date.now();
-            await this.saveRoomToRedis(room);
+            await this.persistRoom(room, { chat: false });
             console.log(`✅ Cards dealt successfully for room ${roomId}`);
             this.broadcastGameState(roomId);
             return true;
@@ -575,7 +723,7 @@ class GameServer {
         try {
             room.gameState = GameEngine_1.GameEngine.selectStartingPlayer(room.gameState, startingPlayerId);
             room.lastActivity = Date.now();
-            await this.saveRoomToRedis(room);
+            await this.persistRoom(room, { chat: false });
             console.log(`✅ Game started successfully for room ${roomId}`);
             this.broadcastGameState(roomId);
             return true;
