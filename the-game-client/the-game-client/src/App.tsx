@@ -18,6 +18,7 @@ interface AppState {
   gameState: ClientGameState | null;
   chatMessages: ChatMessage[];
   error: string | null;
+  reconnectStatus: string | null;
 }
 
 function App() {
@@ -31,7 +32,8 @@ function App() {
     players: [],
     gameState: null,
     chatMessages: [],
-    error: null
+    error: null,
+    reconnectStatus: null
   });
 
   useEffect(() => {
@@ -57,11 +59,28 @@ function App() {
     // Set up event handlers
     const handlers = {
       connected: () => {
-        setState(prev => ({ ...prev, connectionStatus: 'connected', error: null }));
+        setState(prev => ({ ...prev, connectionStatus: 'connected', error: null, reconnectStatus: null }));
       },
 
       disconnected: () => {
-        setState(prev => ({ ...prev, connectionStatus: 'disconnected' }));
+        setState(prev => ({
+          ...prev,
+          connectionStatus: 'disconnected',
+          reconnectStatus: 'Connection lost. Attempting to reconnect...'
+        }));
+      },
+
+      reconnecting: (event: GameClientEvent) => {
+        const seconds = event.nextDelayMs ? Math.round(event.nextDelayMs / 1000) : null;
+        const reconnectMessage = seconds
+          ? `Reconnecting (attempt ${event.attempt}) in ${seconds} second${seconds === 1 ? '' : 's'}...`
+          : `Reconnecting (attempt ${event.attempt})...`;
+
+        setState(prev => ({
+          ...prev,
+          connectionStatus: 'connecting',
+          reconnectStatus: reconnectMessage
+        }));
       },
 
       room_created: (event: GameClientEvent) => {
@@ -319,10 +338,34 @@ function App() {
     );
   };
 
+  const renderReconnectStatus = () => {
+    if (!state.reconnectStatus) {
+      return null;
+    }
+
+    return (
+      <div className="reconnect-status" style={{
+        position: 'fixed',
+        top: 80,
+        left: '50%',
+        transform: 'translateX(-50%)',
+        backgroundColor: '#1976d2',
+        color: 'white',
+        padding: '8px 16px',
+        borderRadius: '5px',
+        zIndex: 900,
+        fontSize: '13px'
+      }}>
+        {state.reconnectStatus}
+      </div>
+    );
+  };
+
   return (
     <div className="App">
       {renderConnectionStatus()}
       {renderError()}
+      {renderReconnectStatus()}
 
       {state.screen === 'setup' && (
         <RoomSetup

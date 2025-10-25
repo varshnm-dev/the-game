@@ -3,6 +3,7 @@ import { WebSocketMessage, ClientGameState, ChatMessage, GameAction } from '../t
 export type GameClientEventType =
   | 'connected'
   | 'disconnected'
+  | 'reconnecting'
   | 'room_created'
   | 'room_joined'
   | 'player_joined'
@@ -23,6 +24,8 @@ export interface GameClientEvent {
   chatMessages?: ChatMessage[];
   message?: ChatMessage;
   player?: {id: string, name: string};
+  attempt?: number;
+  nextDelayMs?: number;
 }
 
 export class GameClient {
@@ -30,6 +33,7 @@ export class GameClient {
   private eventHandlers: { [key in GameClientEventType]: ((event: GameClientEvent) => void)[] } = {
     connected: [],
     disconnected: [],
+    reconnecting: [],
     room_created: [],
     room_joined: [],
     player_joined: [],
@@ -42,9 +46,14 @@ export class GameClient {
 
   private serverUrl: string;
   private reconnectAttempts = 0;
-  private maxReconnectAttempts = 5;
   private reconnectDelay = 1000;
+  private maxReconnectDelay = 30000;
   private pingInterval: NodeJS.Timeout | null = null;
+  private httpHeartbeatInterval: NodeJS.Timeout | null = null;
+  private reconnectTimer: NodeJS.Timeout | null = null;
+  private shouldReconnect = true;
+  private readonly httpHeartbeatIntervalMs = 2 * 60 * 1000; // 2 minutes
+  private readonly pingIntervalMs = 3 * 60 * 1000; // 3 minutes
 
   // Connection state for automatic rejoining
   private currentRoomId: string | null = null;
@@ -56,6 +65,8 @@ export class GameClient {
 
   // localStorage keys
   private readonly STORAGE_KEY = 'the-game-session';
+
+  private pendingJoinRequest: { roomId: string; playerId: string; playerName: string } | null = null;
 
   constructor(serverUrl: string = 'wss://the-game-kr4u.onrender.com') {
     this.serverUrl = serverUrl;
@@ -115,21 +126,28 @@ export class GameClient {
 
   connect(): void {
     try {
+      if (this.ws && (this.ws.readyState === WebSocket.OPEN || this.ws.readyState === WebSocket.CONNECTING)) {
+        return;
+      }
+
+      this.shouldReconnect = true;
       this.ws = new WebSocket(this.serverUrl);
 
       this.ws.onopen = () => {
         console.log('Connected to game server');
         this.reconnectAttempts = 0;
+        this.clearReconnectTimer();
         this.startPingInterval();
+        this.startHttpHeartbeat();
         this.emit('connected', { type: 'connected' });
 
         // Auto-rejoin room if we were in one before disconnection
-        if (this.currentRoomId && this.currentPlayerId && this.currentPlayerName) {
+        if (this.pendingJoinRequest) {
+          this.flushPendingJoinRequest();
+        } else if (this.currentRoomId && this.currentPlayerId && this.currentPlayerName) {
           console.log(`Auto-rejoining room ${this.currentRoomId} as ${this.currentPlayerName}`);
           this.isAutoRejoining = true;
-          setTimeout(() => {
-            this.joinRoom(this.currentRoomId!, this.currentPlayerName!);
-          }, 100); // Small delay to ensure connection is fully established
+          this.queueJoinRequest(this.currentRoomId!, this.currentPlayerId!, this.currentPlayerName!);
         }
       };
 
@@ -145,7 +163,9 @@ export class GameClient {
       this.ws.onclose = () => {
         console.log('Disconnected from game server');
         this.stopPingInterval();
+        this.stopHttpHeartbeat();
         this.emit('disconnected', { type: 'disconnected' });
+        this.ws = null;
         this.attemptReconnect();
       };
 
@@ -161,14 +181,21 @@ export class GameClient {
 
   disconnect(): void {
     this.stopPingInterval();
+    this.stopHttpHeartbeat();
+    this.shouldReconnect = false;
+    this.clearReconnectTimer();
+    this.pendingJoinRequest = null;
+    this.isAutoRejoining = false;
     if (this.ws) {
+      this.ws.onclose = null;
       this.ws.close();
       this.ws = null;
     }
   }
 
   private startPingInterval(): void {
-    // Send ping every 10 minutes to keep connection alive (less aggressive)
+    // Send ping every few minutes to keep connection alive
+    this.stopPingInterval();
     this.pingInterval = setInterval(() => {
       if (this.ws && this.ws.readyState === WebSocket.OPEN) {
         try {
@@ -177,7 +204,7 @@ export class GameClient {
           console.warn('Failed to send ping:', error);
         }
       }
-    }, 10 * 60 * 1000); // 10 minutes
+    }, this.pingIntervalMs);
   }
 
   private stopPingInterval(): void {
@@ -187,26 +214,96 @@ export class GameClient {
     }
   }
 
+  private startHttpHeartbeat(): void {
+    this.stopHttpHeartbeat();
+    const baseUrl = this.getHttpBaseUrl();
+
+    this.httpHeartbeatInterval = setInterval(() => {
+      fetch(`${baseUrl}/health`, { cache: 'no-store', keepalive: true })
+        .catch(error => {
+          console.warn('HTTP heartbeat failed:', error);
+        });
+    }, this.httpHeartbeatIntervalMs);
+  }
+
+  private stopHttpHeartbeat(): void {
+    if (this.httpHeartbeatInterval) {
+      clearInterval(this.httpHeartbeatInterval);
+      this.httpHeartbeatInterval = null;
+    }
+  }
+
+  private clearReconnectTimer(): void {
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
+  }
+
   private attemptReconnect(): void {
-    if (this.reconnectAttempts < this.maxReconnectAttempts) {
-      this.reconnectAttempts++;
-      const delay = Math.min(this.reconnectDelay * this.reconnectAttempts, 10000); // Max 10 second delay
-      setTimeout(() => {
-        console.log(`Attempting to reconnect... (${this.reconnectAttempts}/${this.maxReconnectAttempts})`);
-        try {
-          this.connect();
-        } catch (error) {
-          console.error('Reconnection attempt failed:', error);
-          // Try again after a delay
-          this.attemptReconnect();
-        }
-      }, delay);
+    if (!this.shouldReconnect) {
+      return;
+    }
+
+    this.reconnectAttempts++;
+    const backoffDelay = Math.min(
+      this.reconnectDelay * Math.pow(2, this.reconnectAttempts - 1),
+      this.maxReconnectDelay
+    );
+
+    console.log(`Attempting to reconnect in ${backoffDelay}ms (attempt ${this.reconnectAttempts})`);
+
+    this.emit('reconnecting', {
+      type: 'reconnecting',
+      attempt: this.reconnectAttempts,
+      nextDelayMs: backoffDelay
+    });
+
+    this.clearReconnectTimer();
+    this.reconnectTimer = setTimeout(() => {
+      if (!this.shouldReconnect) {
+        return;
+      }
+      try {
+        this.connect();
+      } catch (error) {
+        console.error('Reconnection attempt failed:', error);
+        this.attemptReconnect();
+      }
+    }, backoffDelay);
+  }
+
+  private queueJoinRequest(roomId: string, playerId: string, playerName: string): void {
+    this.pendingJoinRequest = { roomId, playerId, playerName };
+
+    if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+      this.flushPendingJoinRequest();
     } else {
-      console.error('Max reconnection attempts reached. Please refresh the page.');
-      this.emit('error', {
-        type: 'error',
-        error: 'Connection lost. Please refresh the page to reconnect.'
+      console.warn('WebSocket not ready, join request queued until connection is open');
+    }
+  }
+
+  private flushPendingJoinRequest(): void {
+    if (!this.pendingJoinRequest) {
+      return;
+    }
+
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
+      return;
+    }
+
+    const { roomId, playerId, playerName } = this.pendingJoinRequest;
+
+    try {
+      this.send({
+        type: 'join_room',
+        roomId,
+        playerId,
+        playerName
       });
+      this.pendingJoinRequest = null;
+    } catch (error) {
+      console.error('Failed to flush pending join request:', error);
     }
   }
 
@@ -236,6 +333,8 @@ export class GameClient {
           console.log('Auto-rejoin successful');
           this.isAutoRejoining = false;
         }
+
+        this.pendingJoinRequest = null;
 
         this.emit('room_joined', {
           type: 'room_joined',
@@ -346,12 +445,7 @@ export class GameClient {
     const playerId = this.currentPlayerId || this.generatePlayerId();
     // Store player name for auto-rejoin
     this.currentPlayerName = playerName;
-    this.send({
-      type: 'join_room',
-      roomId,
-      playerId,
-      playerName
-    });
+    this.queueJoinRequest(roomId, playerId, playerName);
   }
 
   leaveRoom(): void {
@@ -359,6 +453,8 @@ export class GameClient {
     this.currentRoomId = null;
     this.currentPlayerId = null;
     this.currentPlayerName = null;
+    this.pendingJoinRequest = null;
+    this.isAutoRejoining = false;
     this.clearSessionState();
     this.send({
       type: 'leave_room'
@@ -421,7 +517,7 @@ export class GameClient {
 
   async startGame(roomId: string): Promise<boolean> {
     try {
-      const response = await fetch(`${this.serverUrl.replace('wss://', 'https://').replace('ws://', 'http://')}/api/room/${roomId}/start`, {
+      const response = await fetch(`${this.getHttpBaseUrl()}/api/room/${roomId}/start`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json'
@@ -438,7 +534,7 @@ export class GameClient {
 
   async startGameWithPlayer(roomId: string, startingPlayerId: string): Promise<boolean> {
     try {
-      const response = await fetch(`${this.serverUrl.replace('wss://', 'https://').replace('ws://', 'http://')}/api/room/${roomId}/start`, {
+      const response = await fetch(`${this.getHttpBaseUrl()}/api/room/${roomId}/start`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json'
@@ -463,6 +559,18 @@ export class GameClient {
 
   private generatePlayerId(): string {
     return Math.random().toString(36).substring(2) + Date.now().toString(36);
+  }
+
+  private getHttpBaseUrl(): string {
+    if (this.serverUrl.startsWith('wss://')) {
+      return this.serverUrl.replace('wss://', 'https://');
+    }
+
+    if (this.serverUrl.startsWith('ws://')) {
+      return this.serverUrl.replace('ws://', 'http://');
+    }
+
+    return this.serverUrl;
   }
 
   isConnected(): boolean {
