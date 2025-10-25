@@ -6,12 +6,12 @@ import { v4 as uuidv4 } from 'uuid';
 
 import { GameEngine } from './game/GameEngine';
 import { ServerGameState, WebSocketMessage, ChatMessage, GameAction } from './types/game';
-import { RedisService, StoredRoom } from './services/RedisService';
+import { RedisService, StoredPlayer, StoredRoomMetadata, StoredRoomSnapshot } from './services/RedisService';
 
 interface GameRoom {
   id: string;
   gameState: ServerGameState | null;
-  players: Map<string, { id: string; name: string; ws: WebSocket }>;
+  players: Map<string, { id: string; name: string; ws: WebSocket | null }>;
   chatMessages: ChatMessage[];
   maxPlayers: number;
   isStarted: boolean;
@@ -122,7 +122,7 @@ class GameServer {
       };
 
       this.rooms.set(roomId, room);
-      await this.saveRoomToRedis(room);
+      await this.persistRoom(room, { chat: false });
 
       console.log(`✅ Room ${roomId} created and saved`);
       res.json({ roomId });
@@ -138,48 +138,118 @@ class GameServer {
     }
   }
 
-  private async saveRoomToRedis(room: GameRoom): Promise<void> {
+  private async persistRoom(
+    room: GameRoom,
+    options?: { metadata?: boolean; players?: boolean; gameState?: boolean; chat?: boolean }
+  ): Promise<void> {
+    const persistOptions = {
+      metadata: true,
+      players: true,
+      gameState: true,
+      chat: true,
+      ...options
+    };
+
     try {
-      const storedRoom: StoredRoom = {
-        id: room.id,
-        gameState: room.gameState,
-        players: Array.from(room.players.values()).map(p => ({ id: p.id, name: p.name })),
-        chatMessages: room.chatMessages,
-        maxPlayers: room.maxPlayers,
-        isStarted: room.isStarted,
-        createdAt: room.createdAt,
-        lastActivity: room.lastActivity
-      };
-      await this.redisService.saveRoom(room.id, storedRoom);
+      const operations: Promise<boolean | void>[] = [];
+
+      if (persistOptions.metadata) {
+        const metadata: StoredRoomMetadata = {
+          id: room.id,
+          maxPlayers: room.maxPlayers,
+          isStarted: room.isStarted,
+          createdAt: room.createdAt,
+          lastActivity: room.lastActivity
+        };
+        operations.push(this.redisService.saveRoomMetadata(room.id, metadata));
+      }
+
+      if (persistOptions.players) {
+        const players: StoredPlayer[] = Array.from(room.players.values()).map(p => ({
+          id: p.id,
+          name: p.name
+        }));
+        operations.push(this.redisService.savePlayers(room.id, players));
+      }
+
+      if (persistOptions.gameState) {
+        if (room.gameState) {
+          operations.push(this.redisService.saveGameState(room.id, room.gameState));
+        } else {
+          operations.push(this.redisService.clearGameState(room.id));
+        }
+      }
+
+      if (persistOptions.chat) {
+        operations.push(this.redisService.setChatMessages(room.id, room.chatMessages));
+      }
+
+      await Promise.all(operations);
     } catch (error) {
-      console.error(`Failed to save room ${room.id} to Redis:`, error);
+      console.error(`Failed to persist room ${room.id}:`, error);
     }
   }
 
-  private async restoreRoomFromStorage(storedRoom: StoredRoom): Promise<GameRoom | null> {
+  private async restoreRoomFromStorage(snapshot: StoredRoomSnapshot): Promise<GameRoom | null> {
     try {
       const room: GameRoom = {
-        id: storedRoom.id,
-        gameState: storedRoom.gameState,
+        id: snapshot.metadata.id,
+        gameState: snapshot.gameState,
         players: new Map(),
-        chatMessages: storedRoom.chatMessages,
-        maxPlayers: storedRoom.maxPlayers,
-        isStarted: storedRoom.isStarted,
-        createdAt: storedRoom.createdAt,
-        lastActivity: storedRoom.lastActivity
+        chatMessages: snapshot.chatMessages,
+        maxPlayers: snapshot.metadata.maxPlayers,
+        isStarted: snapshot.metadata.isStarted,
+        createdAt: snapshot.metadata.createdAt,
+        lastActivity: snapshot.metadata.lastActivity
       };
 
-      // Note: WebSocket connections will be restored when players reconnect
-      storedRoom.players.forEach(p => {
-        room.players.set(p.id, { id: p.id, name: p.name, ws: null as any });
+      snapshot.players.forEach((player) => {
+        room.players.set(player.id, { id: player.id, name: player.name, ws: null });
       });
 
       this.rooms.set(room.id, room);
       console.log(`📦 Room ${room.id} restored from storage`);
       return room;
     } catch (error) {
-      console.error(`Failed to restore room ${storedRoom.id}:`, error);
+      console.error(`Failed to restore room ${snapshot.metadata.id}:`, error);
       return null;
+    }
+  }
+
+  private async hydrateRoomFromPersistence(room: GameRoom): Promise<void> {
+    try {
+      const snapshot = await this.redisService.getRoom(room.id);
+      if (!snapshot) {
+        return;
+      }
+
+      room.maxPlayers = snapshot.metadata.maxPlayers;
+      room.isStarted = snapshot.metadata.isStarted;
+      room.createdAt = snapshot.metadata.createdAt;
+      room.lastActivity = snapshot.metadata.lastActivity;
+      room.chatMessages = snapshot.chatMessages;
+      room.gameState = snapshot.gameState;
+
+      const playersFromSnapshot = new Map<string, { id: string; name: string; ws: WebSocket | null }>();
+      snapshot.players.forEach((storedPlayer) => {
+        const existing = room.players.get(storedPlayer.id);
+        playersFromSnapshot.set(storedPlayer.id, {
+          id: storedPlayer.id,
+          name: storedPlayer.name,
+          ws: existing?.ws || null
+        });
+      });
+
+      // Preserve any players currently connected but not yet persisted
+      room.players.forEach((player, playerId) => {
+        if (!playersFromSnapshot.has(playerId)) {
+          playersFromSnapshot.set(playerId, player);
+        }
+      });
+
+      room.players = playersFromSnapshot;
+    } catch (error) {
+      console.error(`Failed to hydrate room ${room.id} from persistence:`, error);
     }
   }
 
@@ -271,6 +341,8 @@ class GameServer {
       return ws.send(JSON.stringify({ type: 'error', error: 'Room not found' }));
     }
 
+    await this.hydrateRoomFromPersistence(room);
+
     const existingPlayer = room.players.get(playerId);
     const isRejoining = !!existingPlayer;
 
@@ -287,10 +359,12 @@ class GameServer {
     console.log(`✅ Player ${playerName} ${isRejoining ? 'rejoined' : 'joined'} room ${roomId}`);
 
     // If player was in game state, reconnect them to the game
+    let playerInGame = false;
     if (room.gameState) {
       const gamePlayer = room.gameState.players.find(p => p.id === playerId);
       if (gamePlayer) {
         gamePlayer.isConnected = true;
+        playerInGame = true;
         console.log(`🔄 Player ${playerName} (${playerId}) reconnected to ongoing game in room ${roomId}`);
 
         // Notify other connected players that this player has reconnected
@@ -302,6 +376,8 @@ class GameServer {
       }
     }
 
+    await this.persistRoom(room, { chat: false });
+
     // Send success response
     ws.send(JSON.stringify({
       type: 'room_joined',
@@ -310,8 +386,8 @@ class GameServer {
       players: Array.from(room.players.values()).map(p => ({ id: p.id, name: p.name }))
     }));
 
-    // If there's an active game, send current game state to rejoining player
-    if (room.gameState && isRejoining) {
+    // If there's an active game, send current game state to the player
+    if (room.gameState && playerInGame) {
       console.log(`🎮 Sending game state to rejoining player ${playerName}`);
       const clientGameState = GameEngine.createClientGameState(room.gameState, playerId);
       ws.send(JSON.stringify({
@@ -320,9 +396,6 @@ class GameServer {
         chatMessages: room.chatMessages
       }));
     }
-
-    // Save room state to Redis after player joins
-    await this.saveRoomToRedis(room);
 
     // Notify other players (only if it's a new join, not a rejoin)
     if (!isRejoining) {
@@ -360,7 +433,7 @@ class GameServer {
     this.playerConnections.set(ws, { playerId, roomId });
     this.rooms.set(roomId, room);
 
-    await this.saveRoomToRedis(room);
+    await this.persistRoom(room);
     console.log(`✅ Room ${roomId} created by ${playerName}`);
 
     ws.send(JSON.stringify({
@@ -411,8 +484,8 @@ class GameServer {
       room.gameState = newGameState;
       room.lastActivity = Date.now();
 
-      // Save updated game state to Redis
-      await this.saveRoomToRedis(room);
+      // Save updated game state to Redis before broadcasting
+      await this.persistRoom(room, { chat: false });
 
       // Broadcast updated game state to all players
       this.broadcastGameState(connection.roomId);
@@ -440,18 +513,21 @@ class GameServer {
       timestamp: Date.now()
     };
 
-    room.chatMessages.push(chatMessage);
-    room.lastActivity = Date.now();
-
-    // Keep only last 100 messages
-    if (room.chatMessages.length > 100) {
-      room.chatMessages = room.chatMessages.slice(-100);
-    }
-
     console.log(`💬 Chat message from ${connection.playerId} in room ${connection.roomId}`);
 
-    // Save updated chat to Redis
-    await this.saveRoomToRedis(room);
+    const appended = await this.redisService.appendChatMessage(connection.roomId, chatMessage);
+
+    if (appended) {
+      room.chatMessages = await this.redisService.getChatMessages(connection.roomId);
+    } else {
+      room.chatMessages.push(chatMessage);
+      if (room.chatMessages.length > 100) {
+        room.chatMessages = room.chatMessages.slice(-100);
+      }
+    }
+
+    room.lastActivity = Date.now();
+    await this.persistRoom(room, { gameState: false, chat: false });
 
     this.broadcastToRoom(connection.roomId, {
       type: 'chat_message',
@@ -460,7 +536,7 @@ class GameServer {
   }
 
   private async handleLeaveRoom(ws: WebSocket, message: WebSocketMessage) {
-    await this.handlePlayerDisconnection(ws);
+    await this.handlePlayerDisconnection(ws, { removeCompletely: true });
   }
 
   private async handleSelectStartingPlayer(ws: WebSocket, message: WebSocketMessage) {
@@ -479,7 +555,7 @@ class GameServer {
     }
   }
 
-  private async handlePlayerDisconnection(ws: WebSocket) {
+  private async handlePlayerDisconnection(ws: WebSocket, options?: { removeCompletely?: boolean }) {
     const connection = this.playerConnections.get(ws);
     if (!connection) return;
 
@@ -489,8 +565,17 @@ class GameServer {
     if (room) {
       const player = room.players.get(connection.playerId);
       const playerName = player?.name || 'Unknown';
+      const shouldRemovePlayer = options?.removeCompletely || !room.gameState;
 
-      room.players.delete(connection.playerId);
+      if (player) {
+        if (shouldRemovePlayer) {
+          room.players.delete(connection.playerId);
+        } else {
+          player.ws = null;
+          room.players.set(connection.playerId, player);
+        }
+      }
+
       room.lastActivity = Date.now();
 
       // Mark player as disconnected in game state (but keep them for reconnection)
@@ -507,23 +592,32 @@ class GameServer {
             playerName: playerName
           });
         }
-      } else {
-        // If no game state, notify about player leaving
+      } else if (shouldRemovePlayer) {
+        // If no game state and player left entirely, notify about player leaving
         this.broadcastToRoom(connection.roomId, {
           type: 'player_left',
           playerId: connection.playerId
         });
+      } else {
+        // Before the game starts, treat disconnects as temporary
+        this.broadcastToRoom(connection.roomId, {
+          type: 'player_disconnected',
+          playerId: connection.playerId,
+          playerName: playerName
+        });
       }
 
       // Update room in Redis with current state
-      await this.saveRoomToRedis(room);
+      await this.persistRoom(room, { chat: false });
 
       // Only remove from memory if no active game or all players disconnected
       // Keep rooms with active games in memory for better performance
-      if (room.players.size === 0 && (!room.gameState || room.gameState.status === 'waiting')) {
+      const connectedPlayers = Array.from(room.players.values()).filter(p => p.ws && p.ws.readyState === WebSocket.OPEN).length;
+
+      if (connectedPlayers === 0 && (!room.gameState || room.gameState.status === 'waiting')) {
         console.log(`🧹 Room ${connection.roomId} now empty and no active game, removing from memory but keeping in Redis`);
         this.rooms.delete(connection.roomId);
-      } else if (room.players.size === 0 && room.gameState) {
+      } else if (connectedPlayers === 0 && room.gameState) {
         console.log(`🔄 Room ${connection.roomId} empty but has active game - keeping in memory for reconnection`);
       }
     }
@@ -536,7 +630,7 @@ class GameServer {
     if (!room || !room.gameState) return;
 
     room.players.forEach((player) => {
-      if (player.ws.readyState === WebSocket.OPEN) {
+      if (player.ws && player.ws.readyState === WebSocket.OPEN) {
         const clientGameState = GameEngine.createClientGameState(room.gameState!, player.id);
         player.ws.send(JSON.stringify({
           type: 'game_state_update',
@@ -552,7 +646,7 @@ class GameServer {
     if (!room) return;
 
     room.players.forEach((player) => {
-      if (player.id !== excludePlayerId && player.ws.readyState === WebSocket.OPEN) {
+      if (player.id !== excludePlayerId && player.ws && player.ws.readyState === WebSocket.OPEN) {
         player.ws.send(JSON.stringify(message));
       }
     });
@@ -600,17 +694,19 @@ class GameServer {
     }
 
     try {
-      const playerData = Array.from(room.players.values()).map(p => ({
-        id: p.id,
-        name: p.name,
-        connectionId: p.id
-      }));
+      const playerData = Array.from(room.players.values())
+        .filter(p => p.ws && p.ws.readyState === WebSocket.OPEN)
+        .map(p => ({
+          id: p.id,
+          name: p.name,
+          connectionId: p.id
+        }));
 
       room.gameState = GameEngine.initializeGame(roomId, playerData);
       room.isStarted = true;
       room.lastActivity = Date.now();
 
-      await this.saveRoomToRedis(room);
+      await this.persistRoom(room, { chat: false });
       console.log(`✅ Cards dealt successfully for room ${roomId}`);
 
       this.broadcastGameState(roomId);
@@ -633,7 +729,7 @@ class GameServer {
       room.gameState = GameEngine.selectStartingPlayer(room.gameState, startingPlayerId);
       room.lastActivity = Date.now();
 
-      await this.saveRoomToRedis(room);
+      await this.persistRoom(room, { chat: false });
       console.log(`✅ Game started successfully for room ${roomId}`);
 
       this.broadcastGameState(roomId);
