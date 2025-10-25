@@ -12,6 +12,14 @@ export interface StoredRoom {
   lastActivity: number;
 }
 
+export interface RedisServiceLike {
+  connect(): Promise<void>;
+  saveRoom(roomId: string, room: StoredRoom): Promise<boolean>;
+  getRoom(roomId: string): Promise<StoredRoom | null>;
+  cleanupExpiredRooms(): Promise<number>;
+  healthCheck(): Promise<{ connected: boolean; roomCount: number; error?: string }>;
+}
+
 export class RedisService {
   private client: RedisClientType;
   private connected: boolean = false;

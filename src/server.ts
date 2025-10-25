@@ -6,17 +6,29 @@ import { v4 as uuidv4 } from 'uuid';
 
 import { GameEngine } from './game/GameEngine';
 import { ServerGameState, WebSocketMessage, ChatMessage, GameAction } from './types/game';
-import { RedisService, StoredRoom } from './services/RedisService';
+import { RedisService, StoredRoom, RedisServiceLike } from './services/RedisService';
+
+interface RoomPlayer {
+  id: string;
+  name: string;
+}
 
 interface GameRoom {
   id: string;
   gameState: ServerGameState | null;
-  players: Map<string, { id: string; name: string; ws: WebSocket }>;
+  players: Map<string, RoomPlayer>;
+  connections: Map<string, WebSocket>;
   chatMessages: ChatMessage[];
   maxPlayers: number;
   isStarted: boolean;
   createdAt: number;
   lastActivity: number;
+}
+
+interface GameServerOptions {
+  redisService?: RedisServiceLike;
+  enableCleanupTimer?: boolean;
+  autoConnectRedis?: boolean;
 }
 
 class GameServer {
@@ -25,14 +37,19 @@ class GameServer {
   private wss = new WebSocket.Server({ server: this.server });
   private rooms = new Map<string, GameRoom>();
   private playerConnections = new Map<WebSocket, { playerId: string; roomId: string }>();
-  private redisService: RedisService;
+  private redisService: RedisServiceLike;
+  private cleanupInterval: NodeJS.Timeout | null = null;
 
-  constructor() {
-    this.redisService = new RedisService();
+  constructor(options: GameServerOptions = {}) {
+    this.redisService = options.redisService ?? new RedisService();
     this.setupExpress();
     this.setupWebSocket();
-    this.startCleanupTimer();
-    this.connectToRedis();
+    if (options.enableCleanupTimer !== false) {
+      this.startCleanupTimer();
+    }
+    if (options.autoConnectRedis !== false) {
+      this.connectToRedis();
+    }
   }
 
   private setupExpress() {
@@ -114,6 +131,7 @@ class GameServer {
         id: roomId,
         gameState: null,
         players: new Map(),
+        connections: new Map(),
         chatMessages: [],
         maxPlayers: 5,
         isStarted: false,
@@ -161,18 +179,14 @@ class GameServer {
       const room: GameRoom = {
         id: storedRoom.id,
         gameState: storedRoom.gameState,
-        players: new Map(),
+        players: new Map(storedRoom.players.map(p => [p.id, { id: p.id, name: p.name }])),
+        connections: new Map(),
         chatMessages: storedRoom.chatMessages,
         maxPlayers: storedRoom.maxPlayers,
         isStarted: storedRoom.isStarted,
         createdAt: storedRoom.createdAt,
         lastActivity: storedRoom.lastActivity
       };
-
-      // Note: WebSocket connections will be restored when players reconnect
-      storedRoom.players.forEach(p => {
-        room.players.set(p.id, { id: p.id, name: p.name, ws: null as any });
-      });
 
       this.rooms.set(room.id, room);
       console.log(`📦 Room ${room.id} restored from storage`);
@@ -279,8 +293,9 @@ class GameServer {
       return ws.send(JSON.stringify({ type: 'error', error: 'Room is full' }));
     }
 
-    // Add or update player in room
-    room.players.set(playerId, { id: playerId, name: playerName, ws });
+    // Ensure player metadata exists and connection map is current
+    room.players.set(playerId, { id: playerId, name: playerName });
+    room.connections.set(playerId, ws);
     this.playerConnections.set(ws, { playerId, roomId });
     room.lastActivity = Date.now();
 
@@ -348,6 +363,7 @@ class GameServer {
       id: roomId,
       gameState: null,
       players: new Map(),
+      connections: new Map(),
       chatMessages: [],
       maxPlayers: 5,
       isStarted: false,
@@ -356,7 +372,8 @@ class GameServer {
     };
 
     // Add creator to room
-    room.players.set(playerId, { id: playerId, name: playerName, ws });
+    room.players.set(playerId, { id: playerId, name: playerName });
+    room.connections.set(playerId, ws);
     this.playerConnections.set(ws, { playerId, roomId });
     this.rooms.set(roomId, room);
 
@@ -460,7 +477,7 @@ class GameServer {
   }
 
   private async handleLeaveRoom(ws: WebSocket, message: WebSocketMessage) {
-    await this.handlePlayerDisconnection(ws);
+    await this.handlePlayerDisconnection(ws, { removeFromRoom: true });
   }
 
   private async handleSelectStartingPlayer(ws: WebSocket, message: WebSocketMessage) {
@@ -479,7 +496,7 @@ class GameServer {
     }
   }
 
-  private async handlePlayerDisconnection(ws: WebSocket) {
+  private async handlePlayerDisconnection(ws: WebSocket, options: { removeFromRoom?: boolean } = {}) {
     const connection = this.playerConnections.get(ws);
     if (!connection) return;
 
@@ -490,7 +507,10 @@ class GameServer {
       const player = room.players.get(connection.playerId);
       const playerName = player?.name || 'Unknown';
 
-      room.players.delete(connection.playerId);
+      room.connections.delete(connection.playerId);
+      if (options.removeFromRoom) {
+        room.players.delete(connection.playerId);
+      }
       room.lastActivity = Date.now();
 
       // Mark player as disconnected in game state (but keep them for reconnection)
@@ -507,11 +527,17 @@ class GameServer {
             playerName: playerName
           });
         }
-      } else {
-        // If no game state, notify about player leaving
+      } else if (options.removeFromRoom) {
+        // If no game state and player intentionally left, notify others
         this.broadcastToRoom(connection.roomId, {
           type: 'player_left',
           playerId: connection.playerId
+        });
+      } else {
+        this.broadcastToRoom(connection.roomId, {
+          type: 'player_disconnected',
+          playerId: connection.playerId,
+          playerName: playerName
         });
       }
 
@@ -523,27 +549,44 @@ class GameServer {
       if (room.players.size === 0 && (!room.gameState || room.gameState.status === 'waiting')) {
         console.log(`🧹 Room ${connection.roomId} now empty and no active game, removing from memory but keeping in Redis`);
         this.rooms.delete(connection.roomId);
-      } else if (room.players.size === 0 && room.gameState) {
-        console.log(`🔄 Room ${connection.roomId} empty but has active game - keeping in memory for reconnection`);
+      } else if (room.connections.size === 0 && room.gameState) {
+        console.log(`🔄 Room ${connection.roomId} has no connected players but has active game - keeping in memory for reconnection`);
       }
     }
 
     this.playerConnections.delete(ws);
   }
 
+  private forEachActiveConnection(room: GameRoom, callback: (playerId: string, socket: WebSocket) => void) {
+    const disconnectedPlayers: string[] = [];
+
+    room.connections.forEach((socket, playerId) => {
+      if (!socket || socket.readyState !== WebSocket.OPEN) {
+        if (!socket || socket.readyState === WebSocket.CLOSING || socket.readyState === WebSocket.CLOSED) {
+          disconnectedPlayers.push(playerId);
+        }
+        return;
+      }
+
+      callback(playerId, socket);
+    });
+
+    disconnectedPlayers.forEach(playerId => {
+      room.connections.delete(playerId);
+    });
+  }
+
   private broadcastGameState(roomId: string) {
     const room = this.rooms.get(roomId);
     if (!room || !room.gameState) return;
 
-    room.players.forEach((player) => {
-      if (player.ws.readyState === WebSocket.OPEN) {
-        const clientGameState = GameEngine.createClientGameState(room.gameState!, player.id);
-        player.ws.send(JSON.stringify({
-          type: 'game_state_update',
-          gameState: clientGameState,
-          chatMessages: room.chatMessages
-        }));
-      }
+    this.forEachActiveConnection(room, (playerId, socket) => {
+      const clientGameState = GameEngine.createClientGameState(room.gameState!, playerId);
+      socket.send(JSON.stringify({
+        type: 'game_state_update',
+        gameState: clientGameState,
+        chatMessages: room.chatMessages
+      }));
     });
   }
 
@@ -551,9 +594,9 @@ class GameServer {
     const room = this.rooms.get(roomId);
     if (!room) return;
 
-    room.players.forEach((player) => {
-      if (player.id !== excludePlayerId && player.ws.readyState === WebSocket.OPEN) {
-        player.ws.send(JSON.stringify(message));
+    this.forEachActiveConnection(room, (playerId, socket) => {
+      if (playerId !== excludePlayerId) {
+        socket.send(JSON.stringify(message));
       }
     });
   }
@@ -653,8 +696,10 @@ class GameServer {
   }
 }
 
-// Start the server
-const gameServer = new GameServer();
-gameServer.start();
+// Start the server when executed directly
+if (require.main === module) {
+  const gameServer = new GameServer();
+  gameServer.start();
+}
 
 export default GameServer;
