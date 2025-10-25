@@ -118,6 +118,56 @@ class GameServer {
             console.error('😱 Failed to connect to Redis, continuing without persistence:', error);
         }
     }
+    getStoredPlayers(room) {
+        return Array.from(room.players.values()).map(player => ({ id: player.id, name: player.name }));
+    }
+    supportsStructuredPersistence(service) {
+        return (typeof service.saveRoomMetadata === 'function' &&
+            typeof service.savePlayers === 'function' &&
+            typeof service.saveGameState === 'function' &&
+            typeof service.clearGameState === 'function' &&
+            typeof service.setChatMessages === 'function');
+    }
+    hasLegacyRoomPersistence(service) {
+        return typeof service.saveRoom === 'function';
+    }
+    isStructuredSnapshot(snapshot) {
+        return snapshot.metadata !== undefined;
+    }
+    normalizeSnapshot(snapshot) {
+        if (this.isStructuredSnapshot(snapshot)) {
+            return {
+                metadata: snapshot.metadata,
+                players: snapshot.players ?? [],
+                gameState: snapshot.gameState ?? null,
+                chatMessages: snapshot.chatMessages ?? []
+            };
+        }
+        return {
+            metadata: {
+                id: snapshot.id,
+                maxPlayers: snapshot.maxPlayers ?? snapshot.players?.length ?? 0,
+                isStarted: snapshot.isStarted ?? false,
+                createdAt: snapshot.createdAt ?? Date.now(),
+                lastActivity: snapshot.lastActivity ?? Date.now()
+            },
+            players: snapshot.players ?? [],
+            gameState: snapshot.gameState ?? null,
+            chatMessages: snapshot.chatMessages ?? []
+        };
+    }
+    buildLegacySnapshot(room) {
+        return {
+            id: room.id,
+            gameState: room.gameState,
+            players: this.getStoredPlayers(room),
+            chatMessages: room.chatMessages,
+            maxPlayers: room.maxPlayers,
+            isStarted: room.isStarted,
+            createdAt: room.createdAt,
+            lastActivity: room.lastActivity
+        };
+    }
     async persistRoom(room, options) {
         const persistOptions = {
             metadata: true,
@@ -127,36 +177,39 @@ class GameServer {
             ...options
         };
         try {
-            const operations = [];
-            if (persistOptions.metadata) {
-                const metadata = {
-                    id: room.id,
-                    maxPlayers: room.maxPlayers,
-                    isStarted: room.isStarted,
-                    createdAt: room.createdAt,
-                    lastActivity: room.lastActivity
-                };
-                operations.push(this.redisService.saveRoomMetadata(room.id, metadata));
-            }
-            if (persistOptions.players) {
-                const players = Array.from(room.players.values()).map(p => ({
-                    id: p.id,
-                    name: p.name
-                }));
-                operations.push(this.redisService.savePlayers(room.id, players));
-            }
-            if (persistOptions.gameState) {
-                if (room.gameState) {
-                    operations.push(this.redisService.saveGameState(room.id, room.gameState));
+            if (this.supportsStructuredPersistence(this.redisService)) {
+                const operations = [];
+                if (persistOptions.metadata) {
+                    const metadata = {
+                        id: room.id,
+                        maxPlayers: room.maxPlayers,
+                        isStarted: room.isStarted,
+                        createdAt: room.createdAt,
+                        lastActivity: room.lastActivity
+                    };
+                    operations.push(this.redisService.saveRoomMetadata(room.id, metadata));
                 }
-                else {
-                    operations.push(this.redisService.clearGameState(room.id));
+                if (persistOptions.players) {
+                    operations.push(this.redisService.savePlayers(room.id, this.getStoredPlayers(room)));
+                }
+                if (persistOptions.gameState) {
+                    if (room.gameState) {
+                        operations.push(this.redisService.saveGameState(room.id, room.gameState));
+                    }
+                    else {
+                        operations.push(this.redisService.clearGameState(room.id));
+                    }
+                }
+                if (persistOptions.chat) {
+                    operations.push(this.redisService.setChatMessages(room.id, room.chatMessages));
+                }
+                await Promise.all(operations);
+            }
+            else if (this.hasLegacyRoomPersistence(this.redisService)) {
+                if (persistOptions.metadata || persistOptions.players || persistOptions.gameState || persistOptions.chat) {
+                    await this.redisService.saveRoom(room.id, this.buildLegacySnapshot(room));
                 }
             }
-            if (persistOptions.chat) {
-                operations.push(this.redisService.setChatMessages(room.id, room.chatMessages));
-            }
-            await Promise.all(operations);
         }
         catch (error) {
             console.error(`Failed to persist room ${room.id}:`, error);
@@ -164,23 +217,25 @@ class GameServer {
     }
     async restoreRoomFromStorage(snapshot) {
         try {
+            const normalized = this.normalizeSnapshot(snapshot);
             const room = {
-                id: snapshot.metadata.id,
-                gameState: snapshot.gameState,
-                players: new Map(snapshot.players.map(player => [player.id, { id: player.id, name: player.name }])),
+                id: normalized.metadata.id,
+                gameState: normalized.gameState,
+                players: new Map(normalized.players.map(player => [player.id, { id: player.id, name: player.name }])),
                 connections: new Map(),
-                chatMessages: snapshot.chatMessages,
-                maxPlayers: snapshot.metadata.maxPlayers,
-                isStarted: snapshot.metadata.isStarted,
-                createdAt: snapshot.metadata.createdAt,
-                lastActivity: snapshot.metadata.lastActivity
+                chatMessages: normalized.chatMessages,
+                maxPlayers: normalized.metadata.maxPlayers,
+                isStarted: normalized.metadata.isStarted,
+                createdAt: normalized.metadata.createdAt,
+                lastActivity: normalized.metadata.lastActivity
             };
             this.rooms.set(room.id, room);
             console.log(`📦 Room ${room.id} restored from storage`);
             return room;
         }
         catch (error) {
-            console.error(`Failed to restore room ${snapshot.metadata.id}:`, error);
+            const id = this.isStructuredSnapshot(snapshot) ? snapshot.metadata.id : snapshot.id;
+            console.error(`Failed to restore room ${id}:`, error);
             return null;
         }
     }
@@ -190,14 +245,15 @@ class GameServer {
             if (!snapshot) {
                 return;
             }
-            room.maxPlayers = snapshot.metadata.maxPlayers;
-            room.isStarted = snapshot.metadata.isStarted;
-            room.createdAt = snapshot.metadata.createdAt;
-            room.lastActivity = snapshot.metadata.lastActivity;
-            room.chatMessages = snapshot.chatMessages;
-            room.gameState = snapshot.gameState;
+            const normalized = this.normalizeSnapshot(snapshot);
+            room.maxPlayers = normalized.metadata.maxPlayers;
+            room.isStarted = normalized.metadata.isStarted;
+            room.createdAt = normalized.metadata.createdAt;
+            room.lastActivity = normalized.metadata.lastActivity;
+            room.chatMessages = normalized.chatMessages;
+            room.gameState = normalized.gameState;
             const playersFromSnapshot = new Map();
-            snapshot.players.forEach((storedPlayer) => {
+            normalized.players.forEach((storedPlayer) => {
                 playersFromSnapshot.set(storedPlayer.id, { id: storedPlayer.id, name: storedPlayer.name });
             });
             // Preserve any players currently connected but not yet persisted
@@ -450,9 +506,19 @@ class GameServer {
             timestamp: Date.now()
         };
         console.log(`💬 Chat message from ${connection.playerId} in room ${connection.roomId}`);
-        const appended = await this.redisService.appendChatMessage(connection.roomId, chatMessage);
+        const appendChat = this.redisService.appendChatMessage?.bind(this.redisService);
+        let appended = false;
+        if (appendChat) {
+            appended = await appendChat(connection.roomId, chatMessage);
+        }
         if (appended) {
-            room.chatMessages = await this.redisService.getChatMessages(connection.roomId);
+            const fetchChatMessages = this.redisService.getChatMessages?.bind(this.redisService);
+            if (fetchChatMessages) {
+                room.chatMessages = await fetchChatMessages(connection.roomId);
+            }
+            else {
+                room.chatMessages.push(chatMessage);
+            }
         }
         else {
             room.chatMessages.push(chatMessage);
@@ -461,7 +527,7 @@ class GameServer {
             }
         }
         room.lastActivity = Date.now();
-        await this.persistRoom(room, { gameState: false, chat: false });
+        await this.persistRoom(room, { gameState: false, chat: !appended });
         this.broadcastToRoom(connection.roomId, {
             type: 'chat_message',
             message: chatMessage

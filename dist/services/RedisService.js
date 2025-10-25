@@ -324,6 +324,29 @@ class RedisService {
             chatMessages
         };
     }
+    async saveRoom(roomId, room) {
+        try {
+            const metadata = {
+                id: room.id,
+                maxPlayers: room.maxPlayers,
+                isStarted: room.isStarted,
+                createdAt: room.createdAt,
+                lastActivity: room.lastActivity
+            };
+            const operations = [
+                this.saveRoomMetadata(roomId, metadata),
+                this.savePlayers(roomId, room.players),
+                room.gameState ? this.saveGameState(roomId, room.gameState) : this.clearGameState(roomId),
+                this.setChatMessages(roomId, room.chatMessages)
+            ];
+            const results = await Promise.all(operations);
+            return results.every(result => result !== false);
+        }
+        catch (error) {
+            console.error(`Failed to save legacy room ${roomId}:`, error);
+            return false;
+        }
+    }
     async deleteRoom(roomId) {
         try {
             if (!this.isConnected()) {
